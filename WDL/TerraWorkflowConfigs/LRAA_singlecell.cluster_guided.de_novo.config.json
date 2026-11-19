@@ -5,6 +5,7 @@
   "LRAA_singlecell_wf.precomputed_cluster_assignments_tsv": "${this.cell_clusters_info}",
   "LRAA_singlecell_wf.single_cell_pipe_mode": "cluster-guided",
   "LRAA_singlecell_wf.quant_only": "${false}",
+  "LRAA_singlecell_wf.sc_nucseq": "${false}",
   "LRAA_singlecell_wf.HiFi": "${this.LRAA_HiFi}",
   "LRAA_singlecell_wf.main_chromosomes": "${this.LRAA_main_chromosomes}",
   "LRAA_singlecell_wf.cell_barcode_tag": "CB",

@@ -40,6 +40,16 @@ Seurat clustering parameters (defaults mirror included R pipeline):
 - `min_cells` (10), `min_features` (1000), `percent_mt_max` (20.0), `mt_pattern` (`^(MT-|mt-|g:(chrM|MT|M):)`; matches conventional mitochondrial gene symbols and annotation-free LRAA gene IDs on `chrM`, `MT`, or `M`)
 - `npcs` (12), `resolution` (0.6), `n_variable_features` (2000), `seed` (1)
 
+Single-nucleus libraries:
+- `sc_nucseq` (false) – opt-in single-nucleus mode for snRNA-seq, where most reads are unspliced pre-mRNA. Never switched on from the data. When true:
+  - the initial pass and the cluster-guided final quant also run LRAA's gene-body counting (config key `gene_body_counts`, see `docs/single_nucleus_intronic_gene_counts.md`): every read is credited to one gene, intronic and partly spliced reads included, and classed spliced (S), unspliced (U) or ambiguous (A). This holds in both discovery modes, de novo and ref-guided, where reads are credited to the genes of the models the run reports, and in `quant_only` mode, where they are credited to `initial_annot_gtf`'s genes. Isoform outputs are unchanged
+  - `gene_full` (S + U + A) matrices are built next to the standard gene matrix, which stays as it is
+  - empty-droplet filtering calls cells on `gene_full`, and Seurat clusters on it, with `min_features_nucseq` (1000) in place of `min_features` and variable genes ranked within bins of log10 gene span (gene_full counts grow with gene length). Everything downstream of the cluster assignments is unchanged
+  - the key is merged into the config inside the LRAA task, so `init_config_update_json` stays unset and the `quant_only` reuse of the initial pass as the final quant still applies
+  - inputs should be strand-specific (oriented 10x / Kinnex reads): an unspliced read can only take its aligned strand. LRAA logs a warning per contig-strand when more than 20% of spliced reads align against their transcribed strand
+  - the initial pass must run when clustering runs: a `precomputed_init_quant_tracking` carries no gene-body counts
+- `min_features_nucseq` (1000) – Seurat's `min.features` under `sc_nucseq`; gene_full detects many more genes per nucleus than the standard matrix
+
 See `WDL/example_inputs/LRAA-singlecell.inputs.json` for a starting template.
 
 ## Outputs
@@ -50,6 +60,16 @@ From initial discovery:
 - `init_gtf` – initial reconstructed transcripts GTF
 - `init_sc_*_sparse_tar_gz` – tarballs of gene/isoform/splice-pattern sparse matrices
 - `seurat_umap_pdf`, `seurat_cluster_assignments` – clustering diagnostics
+
+With `sc_nucseq = true` (all null otherwise):
+- `init_gene_body_tracking` – the initial pass's gene-body sidecar (`<prefix>.quant.gene_body.tracking.gz`), one row per read and gene with its splice class
+- `init_sc_gene_full_sparse_tar_gz` – gene x barcode counts including intronic reads; the matrix cell filtering and clustering used
+- `init_sc_gene_spliced_sparse_tar_gz`, `init_sc_gene_unspliced_sparse_tar_gz`, `init_sc_gene_ambiguous_sparse_tar_gz` – its S, U and A parts; all four share one feature and one barcode list, so S + U + A = gene_full entry for entry
+- `init_gene_body_cell_stats` – per barcode: `gene_full`, `spliced`, `unspliced`, `ambiguous`, `n_genes_full`, `spliced_frac`, `unspliced_frac` (the intronic fraction; high in nuclei)
+- `filtered_gene_full_sparse_tar_gz` – gene_full over the cells emptyDrops called on it (`filtered_gene_sparse_tar_gz` is then the standard gene matrix over the same cells)
+- `seurat_gene_spans_tsv`, `seurat_variable_features_tsv` – the gene spans used, and each gene's span bin, within-bin score and whether it was selected
+- `final_gene_body_tracking`, `final_sc_gene_{full,spliced,unspliced,ambiguous}_sparse_tar_gz`, `final_gene_body_cell_stats` – the same from the pooled final quantification (cluster-guided mode)
+- `incl_gene_symbols_gene_{full,spliced,unspliced,ambiguous}_sparse_tar_gz` – the unfiltered final (else initial) gene-body matrices with gene symbols, when `ref_annot_gtf_source_gene_symbols` is given
 
 Final cluster-guided results (primary deliverables):
 - `final_gtf` – final transcript GTF (cluster-guided discovery + merge)

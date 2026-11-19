@@ -9,6 +9,12 @@ workflow Incorporate_gene_symbols {
     File final_sc_isoform_sparse_tar_gz
     File final_sc_splice_pattern_sparse_tar_gz
     File final_sc_gene_transcript_splicehash_mapping
+    # Single-nucleus mode's gene-body matrices: gene_full and its spliced / unspliced /
+    # ambiguous parts. Same gene ids as the gene matrix, so named the same way.
+    File? final_sc_gene_full_sparse_tar_gz
+    File? final_sc_gene_spliced_sparse_tar_gz
+    File? final_sc_gene_unspliced_sparse_tar_gz
+    File? final_sc_gene_ambiguous_sparse_tar_gz
     String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
     Int gffcompare_memoryGB = 8
     Int integrate_memoryGB = 16
@@ -33,6 +39,10 @@ workflow Incorporate_gene_symbols {
       gene_sparse_tar_gz = final_sc_gene_sparse_tar_gz,
       isoform_sparse_tar_gz = final_sc_isoform_sparse_tar_gz,
       splice_pattern_sparse_tar_gz = final_sc_splice_pattern_sparse_tar_gz,
+      gene_full_sparse_tar_gz = final_sc_gene_full_sparse_tar_gz,
+      gene_spliced_sparse_tar_gz = final_sc_gene_spliced_sparse_tar_gz,
+      gene_unspliced_sparse_tar_gz = final_sc_gene_unspliced_sparse_tar_gz,
+      gene_ambiguous_sparse_tar_gz = final_sc_gene_ambiguous_sparse_tar_gz,
       id_mappings_tsv = final_sc_gene_transcript_splicehash_mapping,
       gffcompare_tracking = run_gffcompare.tracking,
       docker = docker,
@@ -48,6 +58,10 @@ workflow Incorporate_gene_symbols {
     File updated_gene_sparse_tar_gz = integrate_symbols.annotated_gene_sparse_tar_gz
     File updated_isoform_sparse_tar_gz = integrate_symbols.annotated_isoform_sparse_tar_gz
     File updated_splice_pattern_sparse_tar_gz = integrate_symbols.annotated_splice_pattern_sparse_tar_gz
+    File? updated_gene_full_sparse_tar_gz = integrate_symbols.annotated_gene_full_sparse_tar_gz
+    File? updated_gene_spliced_sparse_tar_gz = integrate_symbols.annotated_gene_spliced_sparse_tar_gz
+    File? updated_gene_unspliced_sparse_tar_gz = integrate_symbols.annotated_gene_unspliced_sparse_tar_gz
+    File? updated_gene_ambiguous_sparse_tar_gz = integrate_symbols.annotated_gene_ambiguous_sparse_tar_gz
   }
 }
 
@@ -151,13 +165,18 @@ task incorporate_gene_symbols_sc {
     File gene_sparse_tar_gz
     File isoform_sparse_tar_gz
     File splice_pattern_sparse_tar_gz
+    File? gene_full_sparse_tar_gz
+    File? gene_spliced_sparse_tar_gz
+    File? gene_unspliced_sparse_tar_gz
+    File? gene_ambiguous_sparse_tar_gz
     File id_mappings_tsv
     File? gffcompare_tracking
     String docker
     Int memoryGB = 16
   }
 
-  Int disksize = 50 + ceil(2 * (size(gene_sparse_tar_gz, "GB") + size(isoform_sparse_tar_gz, "GB") + size(splice_pattern_sparse_tar_gz, "GB")))
+  Int disksize = 50 + ceil(2 * (size(gene_sparse_tar_gz, "GB") + size(isoform_sparse_tar_gz, "GB") + size(splice_pattern_sparse_tar_gz, "GB")
+      + size(gene_full_sparse_tar_gz, "GB") + size(gene_spliced_sparse_tar_gz, "GB") + size(gene_unspliced_sparse_tar_gz, "GB") + size(gene_ambiguous_sparse_tar_gz, "GB")))
 
   # "." rather than "^": this File crosses task/workflow boundaries and Apptainer's
   # --bind spec parser mis-splits paths containing a literal "^" (Docker is unaffected).
@@ -237,10 +256,24 @@ task incorporate_gene_symbols_sc {
       exit 1
     fi
 
+    # Gene-body matrices (single-nucleus mode), each named like the gene matrix and
+    # re-tarred under its own level name.
+    gene_body_dirs=()
+    for spec in "gene_full:~{gene_full_sparse_tar_gz}" "gene_spliced:~{gene_spliced_sparse_tar_gz}" \
+                "gene_unspliced:~{gene_unspliced_sparse_tar_gz}" "gene_ambiguous:~{gene_ambiguous_sparse_tar_gz}"; do
+      level="${spec%%:*}"
+      tgz="${spec#*:}"
+      [[ -n "${tgz}" ]] || continue
+      mkdir "gb_${level}"
+      tar -xzf "${tgz}" --no-same-owner -C "gb_${level}"
+      d=$(ls -d gb_${level}/*/ | head -1)
+      gene_body_dirs+=("${d%/}")
+    done
+
     incorporate_gene_symbols_in_sc_features.py \
       --ref_gtf reference.gtf \
       --id_mappings id_mappings.tsv \
-      --sparseM_dirs "${gene_dir}" "${isoform_dir}" "${splice_dir}" \
+      --sparseM_dirs "${gene_dir}" "${isoform_dir}" "${splice_dir}" ${gene_body_dirs[@]+"${gene_body_dirs[@]}"} \
       ~{if defined(final_gtf) then "--LRAA_gtf final.gtf" else ""} \
       ~{if defined(gffcompare_tracking) then "--gffcompare_tracking " + gffcompare_tracking else ""}
 
@@ -254,6 +287,11 @@ task incorporate_gene_symbols_sc {
     tar -zcf "~{gene_sparse_tar_out}" "${gene_dir}"
     tar -zcf "~{isoform_sparse_tar_out}" "${isoform_dir}"
     tar -zcf "~{splice_sparse_tar_out}" "${splice_dir}"
+    for d in ${gene_body_dirs[@]+"${gene_body_dirs[@]}"}; do
+      level="${d%%/*}"
+      level="${level#gb_}"
+      tar -zcf "~{sample_id}.withGeneSymbols.${level}-sparseM.tar.gz" -C "$(dirname "$d")" "$(basename "$d")"
+    done
 
   >>>
 
@@ -263,6 +301,10 @@ task incorporate_gene_symbols_sc {
     File annotated_gene_sparse_tar_gz = "~{gene_sparse_tar_out}"
     File annotated_isoform_sparse_tar_gz = "~{isoform_sparse_tar_out}"
     File annotated_splice_pattern_sparse_tar_gz = "~{splice_sparse_tar_out}"
+    File? annotated_gene_full_sparse_tar_gz = "~{sample_id}.withGeneSymbols.gene_full-sparseM.tar.gz"
+    File? annotated_gene_spliced_sparse_tar_gz = "~{sample_id}.withGeneSymbols.gene_spliced-sparseM.tar.gz"
+    File? annotated_gene_unspliced_sparse_tar_gz = "~{sample_id}.withGeneSymbols.gene_unspliced-sparseM.tar.gz"
+    File? annotated_gene_ambiguous_sparse_tar_gz = "~{sample_id}.withGeneSymbols.gene_ambiguous-sparseM.tar.gz"
   }
 
   runtime {

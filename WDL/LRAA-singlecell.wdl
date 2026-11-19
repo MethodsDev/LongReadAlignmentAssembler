@@ -79,6 +79,22 @@ version 1.0
 #            sums them per cluster
 #    - Use case: Quantify known isoforms with per-cluster pseudobulk outputs
 #
+# ===== SINGLE-NUCLEUS MODE (sc_nucseq = true; off by default) =====
+#
+# For snRNA-seq, where most reads are unspliced pre-mRNA and fall in introns:
+#    - The init pass and the final quant also credit every read to a gene, intronic
+#      reads included (LRAA config gene_body_counts), in discovery and quant-only mode
+#    - Builds gene_full (spliced + unspliced + ambiguous) matrices and the S/U/A parts
+#      beside the standard matrices, plus a per-barcode table of their totals and the
+#      spliced and unspliced (intronic) fractions
+#    - Cell filtering and Seurat clustering use gene_full, with min_features_nucseq
+#      (1000) and variable genes chosen within gene-length bins
+#    - Downstream of the cluster assignments nothing changes
+#    - Outputs: init_/final_gene_body_tracking, init_/final_sc_gene_{full,spliced,
+#      unspliced,ambiguous}_sparse_tar_gz, init_/final_gene_body_cell_stats,
+#      filtered_gene_full_sparse_tar_gz, seurat_gene_spans_tsv,
+#      seurat_variable_features_tsv, incl_gene_symbols_gene_*_sparse_tar_gz
+#
 # ===== GENE SYMBOL INCORPORATION =====
 #
 # Optionally provide ref_annot_gtf_source_gene_symbols to incorporate gene symbols:
@@ -134,6 +150,19 @@ workflow LRAA_singlecell_wf {
     
     # Quantification-only mode: skip discovery, requires initial_annot_gtf
     Boolean quant_only = false
+
+    # Single-nucleus libraries (snRNA-seq), mostly unspliced pre-mRNA: OFF by default,
+    # and never turned on from the data. On, the init pass and the final quant also
+    # credit every read to a gene, intronic reads included (LRAA gene_body_counts,
+    # docs/single_nucleus_intronic_gene_counts.md), giving gene_full (spliced +
+    # unspliced + ambiguous) matrices beside the standard ones. Cell filtering and
+    # clustering then use gene_full: cells need min_features_nucseq genes, and
+    # variable genes are picked within gene-length bins. Everything downstream of the
+    # cluster assignments is unchanged. Inputs should be strand-specific; LRAA logs a
+    # warning when the spliced reads say otherwise. Needs the initial pass to run when
+    # clustering runs: a precomputed init tracking file carries no gene-body counts.
+    Boolean sc_nucseq = false
+    Int min_features_nucseq = 1000
 
     # Platform/options
     Boolean HiFi = false
@@ -550,6 +579,10 @@ workflow LRAA_singlecell_wf {
         rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
         no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
         config_update_json = init_config_update_json,
+        # Merged into the config inside the runner task, NOT into
+        # init_config_update_json: reuse_init_as_final_quant below requires that input
+        # unset, and the final quant gets the same key from sc_nucseq.
+        gene_body_counts = sc_nucseq,
         # Also given to the cluster_guided call below, for its whole-library final
         # quant only; see the input's declaration.
         num_total_reads = num_total_reads,
@@ -674,6 +707,20 @@ workflow LRAA_singlecell_wf {
       then merge_sc_from_shards.mapping_file
       else build_sc_from_init_tracking.mapping_file
 
+  # Single-nucleus gene-body matrices from the init pass. One build over the merged
+  # sidecar, whichever way the standard matrices above were built.
+  if (sc_nucseq && run_initial_phase) {
+    call BuildMatrices.sc_build_gene_body_sparse as build_init_gene_body {
+      input:
+        sample_id = sample_id,
+        gene_body_tracking = select_first([LRAA_init.mergedGeneBodyTracking]),
+        docker = docker_sc,
+        memoryGB = memoryGBbuildSparseMatrices,
+        gzip_level = sparseMatrixGzipLevel
+    }
+  }
+  File? init_sc_gene_full_tgz = build_init_gene_body.gene_full_sparse_dir_tgz
+
   # 2.5/3) Empty-droplet filtering and clustering, skipped when cluster assignments
   # were supplied. Only these steps are gated; the matrices above are not.
   if (run_clustering_phase) {
@@ -686,6 +733,8 @@ workflow LRAA_singlecell_wf {
           gene_sparse_tar_gz = select_first([init_sc_gene_tgz]),
           isoform_sparse_tar_gz = select_first([init_sc_isoform_tgz]),
           splice_pattern_sparse_tar_gz = select_first([init_sc_splice_tgz]),
+          # nucseq: cells are called on gene_full; null otherwise
+          gene_full_sparse_tar_gz = init_sc_gene_full_tgz,
           docker = docker_sc,
           memoryGB = memoryGBFilterCells,
           fdr_threshold = fdr_threshold,
@@ -694,8 +743,11 @@ workflow LRAA_singlecell_wf {
       }
     }
 
-    # 3) Cluster cells from the gene-level sparse matrix (filtered or unfiltered)
-    File gene_sparse_for_clustering = if enable_filter_good_cells then select_first([filter_good_cells.filtered_gene_sparse_tar_gz]) else select_first([init_sc_gene_tgz])
+    # 3) Cluster cells from the gene-level sparse matrix (filtered or unfiltered):
+    # gene_full in single-nucleus mode, else the standard gene matrix
+    File gene_sparse_for_clustering = if sc_nucseq
+        then (if enable_filter_good_cells then select_first([filter_good_cells.filtered_gene_full_sparse_tar_gz]) else select_first([init_sc_gene_full_tgz]))
+        else (if enable_filter_good_cells then select_first([filter_good_cells.filtered_gene_sparse_tar_gz]) else select_first([init_sc_gene_tgz]))
     
     call Seurat.GeneSparseM_To_SeuratClusters as cluster_cells {
       input:
@@ -704,13 +756,16 @@ workflow LRAA_singlecell_wf {
         docker = docker_sc,
         memoryGB = memoryGBSeurat,
         min_cells = min_cells,
-        min_features = min_features,
+        min_features = if sc_nucseq then min_features_nucseq else min_features,
         percent_mt_max = percent_mt_max,
         mt_pattern = mt_pattern,
         npcs = npcs,
         resolution = resolution,
         n_variable_features = n_variable_features,
-        seed = seed
+        seed = seed,
+        nucseq = sc_nucseq,
+        # the GTF the clustered genes were named from
+        gene_spans_gtf = if quant_only then initial_annot_gtf else init_gtf_file
     }
   }
 
@@ -737,6 +792,13 @@ workflow LRAA_singlecell_wf {
     File? reuse_final_sc_isoform_tgz = init_sc_isoform_tgz
     File? reuse_final_sc_splice_tgz = init_sc_splice_tgz
     File? reuse_final_sc_mapping = init_sc_mapping
+    # null unless sc_nucseq, which then holds for both passes
+    File? reuse_final_gene_body_tracking = LRAA_init.mergedGeneBodyTracking
+    File? reuse_final_sc_gene_full_tgz = build_init_gene_body.gene_full_sparse_dir_tgz
+    File? reuse_final_sc_gene_spliced_tgz = build_init_gene_body.gene_spliced_sparse_dir_tgz
+    File? reuse_final_sc_gene_unspliced_tgz = build_init_gene_body.gene_unspliced_sparse_dir_tgz
+    File? reuse_final_sc_gene_ambiguous_tgz = build_init_gene_body.gene_ambiguous_sparse_dir_tgz
+    File? reuse_final_gene_body_cell_stats = build_init_gene_body.cell_stats_tsv
   }
 
   # 4) Cluster-guided reconstruction + final single-cell matrices (only if mode is 'cluster-guided')
@@ -806,13 +868,20 @@ workflow LRAA_singlecell_wf {
         docker = docker,
         docker_sc = docker_sc,
         quant_only_cluster_guided = quant_only,
+        sc_nucseq = sc_nucseq,
         internal_final_quant_tracking = reuse_final_quant_tracking,
         internal_final_quant_expr = reuse_final_quant_expr,
         internal_final_quant_read_assignment_summary = reuse_final_quant_summary,
         internal_final_sc_gene_tgz = reuse_final_sc_gene_tgz,
         internal_final_sc_isoform_tgz = reuse_final_sc_isoform_tgz,
         internal_final_sc_splice_pattern_tgz = reuse_final_sc_splice_tgz,
-        internal_final_sc_mapping = reuse_final_sc_mapping
+        internal_final_sc_mapping = reuse_final_sc_mapping,
+        internal_final_gene_body_tracking = reuse_final_gene_body_tracking,
+        internal_final_sc_gene_full_tgz = reuse_final_sc_gene_full_tgz,
+        internal_final_sc_gene_spliced_tgz = reuse_final_sc_gene_spliced_tgz,
+        internal_final_sc_gene_unspliced_tgz = reuse_final_sc_gene_unspliced_tgz,
+        internal_final_sc_gene_ambiguous_tgz = reuse_final_sc_gene_ambiguous_tgz,
+        internal_final_gene_body_cell_stats = reuse_final_gene_body_cell_stats
     }
   }
 
@@ -836,6 +905,12 @@ workflow LRAA_singlecell_wf {
   File? isoform_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_isoform_sparse_tar_gz else (if have_filtered_matrices then filter_good_cells.filtered_isoform_sparse_tar_gz else init_sc_isoform_tgz)
   File? splice_pattern_sparse_for_symbols = if run_cluster_guided then cluster_guided.sc_splice_pattern_sparse_tar_gz else (if have_filtered_matrices then filter_good_cells.filtered_splice_pattern_sparse_tar_gz else init_sc_splice_tgz)
   File? mapping_for_symbols = if run_cluster_guided then cluster_guided.sc_gene_transcript_splicehash_mapping else init_sc_mapping
+  # Gene-body matrices (sc_nucseq), unfiltered: the cluster-guided ones, else the init
+  # pass's. The filtered gene_full that clustering used is its own output.
+  File? gene_full_for_symbols = if run_cluster_guided then cluster_guided.sc_gene_full_sparse_tar_gz else build_init_gene_body.gene_full_sparse_dir_tgz
+  File? gene_spliced_for_symbols = if run_cluster_guided then cluster_guided.sc_gene_spliced_sparse_tar_gz else build_init_gene_body.gene_spliced_sparse_dir_tgz
+  File? gene_unspliced_for_symbols = if run_cluster_guided then cluster_guided.sc_gene_unspliced_sparse_tar_gz else build_init_gene_body.gene_unspliced_sparse_dir_tgz
+  File? gene_ambiguous_for_symbols = if run_cluster_guided then cluster_guided.sc_gene_ambiguous_sparse_tar_gz else build_init_gene_body.gene_ambiguous_sparse_dir_tgz
 
   if (defined(ref_annot_gtf_source_gene_symbols) && defined(gene_sparse_for_symbols) && defined(isoform_sparse_for_symbols) && defined(splice_pattern_sparse_for_symbols) && defined(mapping_for_symbols)) {
     call GeneSymbols.Incorporate_gene_symbols as add_gene_symbols {
@@ -847,6 +922,10 @@ workflow LRAA_singlecell_wf {
         final_sc_isoform_sparse_tar_gz = select_first([isoform_sparse_for_symbols]),
         final_sc_splice_pattern_sparse_tar_gz = select_first([splice_pattern_sparse_for_symbols]),
         final_sc_gene_transcript_splicehash_mapping = select_first([mapping_for_symbols]),
+        final_sc_gene_full_sparse_tar_gz = gene_full_for_symbols,
+        final_sc_gene_spliced_sparse_tar_gz = gene_spliced_for_symbols,
+        final_sc_gene_unspliced_sparse_tar_gz = gene_unspliced_for_symbols,
+        final_sc_gene_ambiguous_sparse_tar_gz = gene_ambiguous_for_symbols,
         docker = docker
     }
   }
@@ -908,12 +987,25 @@ workflow LRAA_singlecell_wf {
     File? init_sc_isoform_sparse_tar_gz = init_sc_isoform_tgz
     File? init_sc_splice_pattern_sparse_tar_gz = init_sc_splice_tgz
     File? init_sc_gene_transcript_splicehash_mapping = init_sc_mapping
+
+    # Single-nucleus mode (sc_nucseq) only. The init pass's gene-body sidecar (one row
+    # per read and gene, with splice class), its matrices -- gene_full = spliced +
+    # unspliced + ambiguous, the counts clustering used -- and the per-barcode table of
+    # their totals with spliced and unspliced (intronic) fractions.
+    File? init_gene_body_tracking = LRAA_init.mergedGeneBodyTracking
+    File? init_sc_gene_full_sparse_tar_gz = build_init_gene_body.gene_full_sparse_dir_tgz
+    File? init_sc_gene_spliced_sparse_tar_gz = build_init_gene_body.gene_spliced_sparse_dir_tgz
+    File? init_sc_gene_unspliced_sparse_tar_gz = build_init_gene_body.gene_unspliced_sparse_dir_tgz
+    File? init_sc_gene_ambiguous_sparse_tar_gz = build_init_gene_body.gene_ambiguous_sparse_dir_tgz
+    File? init_gene_body_cell_stats = build_init_gene_body.cell_stats_tsv
     
     
     # Filter empty droplets
     File? filtered_gene_sparse_tar_gz = filter_good_cells.filtered_gene_sparse_tar_gz
     File? filtered_isoform_sparse_tar_gz = filter_good_cells.filtered_isoform_sparse_tar_gz
     File? filtered_splice_pattern_sparse_tar_gz = filter_good_cells.filtered_splice_pattern_sparse_tar_gz
+    # sc_nucseq: gene_full over the cells emptyDrops called on it
+    File? filtered_gene_full_sparse_tar_gz = filter_good_cells.filtered_gene_full_sparse_tar_gz
     File? good_cell_barcodes = filter_good_cells.good_cell_barcodes
     File? filtering_summary = filter_good_cells.filtering_summary
     
@@ -923,6 +1015,9 @@ workflow LRAA_singlecell_wf {
     File? seurat_rds_initial = cluster_cells.seurat_rds_initial
     File? seurat_rds = cluster_cells.seurat_rds
     File? seurat_cluster_assignments = cluster_assignments_generated
+    # sc_nucseq: the gene spans used, and the length-binned variable-gene selection
+    File? seurat_gene_spans_tsv = cluster_cells.gene_spans_tsv
+    File? seurat_variable_features_tsv = cluster_cells.variable_features_tsv
 
     # Final cluster-guided LRAA outputs (main deliverables)
     File? final_gtf = cluster_guided.LRAA_final_gtf
@@ -942,6 +1037,13 @@ workflow LRAA_singlecell_wf {
     File? final_sc_isoform_sparse_tar_gz = cluster_guided.sc_isoform_sparse_tar_gz
     File? final_sc_splice_pattern_sparse_tar_gz = cluster_guided.sc_splice_pattern_sparse_tar_gz
     File? final_sc_gene_transcript_splicehash_mapping = cluster_guided.sc_gene_transcript_splicehash_mapping
+    # sc_nucseq: the final pooled quant's gene-body sidecar, matrices and per-barcode table
+    File? final_gene_body_tracking = cluster_guided.LRAA_final_gene_body_tracking
+    File? final_sc_gene_full_sparse_tar_gz = cluster_guided.sc_gene_full_sparse_tar_gz
+    File? final_sc_gene_spliced_sparse_tar_gz = cluster_guided.sc_gene_spliced_sparse_tar_gz
+    File? final_sc_gene_unspliced_sparse_tar_gz = cluster_guided.sc_gene_unspliced_sparse_tar_gz
+    File? final_sc_gene_ambiguous_sparse_tar_gz = cluster_guided.sc_gene_ambiguous_sparse_tar_gz
+    File? final_gene_body_cell_stats = cluster_guided.gene_body_cell_stats
 
     # Per-cluster read-assignment accounting from the cluster-guided phases, one
     # table per phase. Each holds level=chunk / level=cluster / level=all_clusters
@@ -977,6 +1079,10 @@ workflow LRAA_singlecell_wf {
     File? incl_gene_symbols_gene_sparse_tar_gz = add_gene_symbols.updated_gene_sparse_tar_gz
     File? incl_gene_symbols_isoform_sparse_tar_gz = add_gene_symbols.updated_isoform_sparse_tar_gz
     File? incl_gene_symbols_splice_pattern_sparse_tar_gz = add_gene_symbols.updated_splice_pattern_sparse_tar_gz
+    File? incl_gene_symbols_gene_full_sparse_tar_gz = add_gene_symbols.updated_gene_full_sparse_tar_gz
+    File? incl_gene_symbols_gene_spliced_sparse_tar_gz = add_gene_symbols.updated_gene_spliced_sparse_tar_gz
+    File? incl_gene_symbols_gene_unspliced_sparse_tar_gz = add_gene_symbols.updated_gene_unspliced_sparse_tar_gz
+    File? incl_gene_symbols_gene_ambiguous_sparse_tar_gz = add_gene_symbols.updated_gene_ambiguous_sparse_tar_gz
   }
 }
 

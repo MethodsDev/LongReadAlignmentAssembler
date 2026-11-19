@@ -7,6 +7,11 @@ With the key off, LRAA's outputs are unchanged. With it on, `quant.expr` and
 `quant.tracking` stay identical to a key-off run (tested, chrM included since the
 `--oversimplify` tie-break became deterministic; section 5).
 
+Third revision, 2026-11-19: the key now works in discovery mode too (de novo and
+ref-guided), on the final quant of the assembled models, and the single-cell workflow
+has an opt-in single-nucleus mode, `sc_nucseq`, that clusters on gene_full (section 4,
+"Single-nucleus mode in the WDLs").
+
 ## The problem
 
 In quant-only mode a read is assigned to an isoform only if it is structurally compatible
@@ -65,6 +70,14 @@ unstranded library, half the unspliced reads would land on the wrong strand and 
 antisense or intergenic. There is no special handling for that, by decision
 (user, 2026-11-18). In the ALS window every spliced read carries `ts:A:+`, so that library
 is oriented.
+
+A log-only check flags it. A spliced read's transcribed strand is fixed by its junctions,
+so in an oriented library its aligned strand matches the unit's strand almost always,
+while unstranded cDNA gives about half the other way. `GeneBodyRecorder` counts spliced
+reads whose aligned strand disagrees with the unit's strand and, at `finish()`, logs a
+WARNING for the contig-strand when they are more than 20% of at least 200 spliced reads
+(`STRAND_CHECK_*` in `GeneBodyAssigner`). A reverse-oriented library trips it too, and
+should: its unspliced reads all land on the wrong strand. Nothing written changes.
 
 | class | definition | handled by |
 |---|---|---|
@@ -200,7 +213,7 @@ gene_id  read_name  frac_assigned  splice_class  source  n_genes  aligned_bp  ex
 
 | key | default | meaning |
 |---|---|---|
-| `gene_body_counts` | false | write the sidecar (quant-only with `--gtf` and `--stream_reads`; otherwise LRAA exits with an error at startup) |
+| `gene_body_counts` | false | write the sidecar; needs `--stream_reads` (and `--gtf` under `--quant_only`), else LRAA exits with an error at startup. In discovery mode the genes are the models the run reports |
 | `gene_body_min_read_frac_in_span` | 0.5 | candidate-gene threshold (rule 0) |
 | `gene_body_exclude_readthrough_genes` | true | readthrough-tagged genes are never candidates (rule 0) |
 | `gene_body_min_feature_bp` | 20 | exonic evidence (rule 2) and U threshold |
@@ -240,16 +253,28 @@ gene_id  read_name  frac_assigned  splice_class  source  n_genes  aligned_bp  ex
   - A read with no exonic overlap goes to `GeneBodyIndex`
     (`gene_body:oversimplify_no_exon_overlap`).
   - The read segments come from the Pretty_alignment the path already reads.
-  - The ref-guided-discovery oversimplify branch is not wired, since gene-body counting is
-    quant-only.
-- `LRAA:_contig_job_runner` opens the per-unit sidecar when quant-only and the key is on.
+  - The ref-guided-discovery oversimplify branch passes it too: there the reference models
+    are carried forward and quantified the same way.
+- `LRAA:_run_oversimplify_aggregate` (de novo `--oversimplify`, one pseudo-gene per
+  contig-strand) takes `gene_body_fh`: each read gets an `isoform` row for the aggregate
+  gene, so a de novo chrM reaches gene_full and `percent.mt`.
+- **Discovery mode.** `run_transcript_assembly` takes `gene_body_fh` and hands it to its
+  final `run_quant_only` call, with a new `gene_body_index_transcripts` argument set to
+  the models it is about to report. The index is built from those, not from
+  `reference_transcripts` (only the reference subset there, nothing in de novo), so the
+  sidecar's gene ids are the ones `quant.tracking` carries. Only the final quant records;
+  the draft quant does not stream.
+- `LRAA:_contig_job_runner` opens the per-unit sidecar whenever the key is on.
 - `LRAA:_run_jobs_schedule_and_merge`:
   - concatenates the per-unit sidecars;
   - removes them during cleanup;
   - refuses to reuse a finished shard that lacks a sidecar when the key is on (tested).
 - `pylib/ChunkedRun.py:merge_gene_body_tracking` merges the units' sidecars (all or none;
-  some-but-not-all is an error). `LRAA:_run_chunked_mode` publishes the result and exits with
-  an error if the key is on and no sidecar came back. Chunked mode is the default.
+  some-but-not-all is an error). In discovery it renames gene ids through the same id plan
+  the tracking merge applies (`merged_id_plan` / `mapped_id`), so an id two chunks minted
+  for different models is renamed identically in both files. `LRAA:_run_chunked_mode`
+  publishes the result and exits with an error if the key is on and no sidecar came back.
+  Chunked mode is the default.
 - `LRAA` main validates the settings right after `--config_update` is applied.
 
 **Interactions:**
@@ -258,56 +283,55 @@ gene_id  read_name  frac_assigned  splice_class  source  n_genes  aligned_bp  ex
   `quant.expr` and the tracking file are identical with the key on or off.
 - **Coverage normalization.** The sidecar comes from the second, streaming pass over the
   full `--bam`, so the counts and rule-4 weights are full-library numbers.
-- **Mismapping filter.** It runs only in discovery mode, so there is no interaction.
+- **Mismapping filter.** It runs on the merged discovery outputs and rewrites only the gtf
+  and `quant.expr`. Like `quant.tracking`, the sidecar keeps the rows of a model it drops,
+  so gene_full and the standard gene matrix stay consistent with each other.
 - **Transcriptome rescue.** Rescue runs first. A rescued read is `isoform`.
 - **Batch path (`--no_stream_reads`).** Refused at startup.
 - **Discovery mode's final quant** (`run_transcript_assembly` -> `run_quant_only`,
-  `report_quants=False`). Not wired; LRAA refuses `gene_body_counts` without `--quant_only`.
-  Clustering needs it (below).
+  `report_quants=False`). Wired, since that pass already streams through
+  `StreamingQuant.stream_assign`: no second pass is needed. De novo models carry no GTF
+  tags, so readthrough exclusion applies only to reference genes in ref-guided mode.
 
-### Plan: single-nucleus mode in the WDLs (not implemented; too big to test locally)
+### Single-nucleus mode in the WDLs (`sc_nucseq`)
 
-The user decided (2026-11-18) that gene_full sits beside the existing gene matrix, and that
-in single-nucleus mode clustering uses gene_full. The local pieces are done: LRAA, the
-merges and the matrix builder. The WDL pieces below are a plan. They need Terra or miniwdl
-runs to validate, and one of them needs an LRAA change first.
+`LRAA-singlecell.wdl` has `Boolean sc_nucseq = false`, never set from the data. When true:
 
-1. **Workflow input.** Add `Boolean single_nucleus = false` to `LRAA-singlecell.wdl`,
-   passed down to `LRAA-cell_cluster_guided.wdl`. When true, add `"gene_body_counts": true`
-   to the config JSON of every pass that produces matrices.
-2. **Runner output.** `subwdls/LRAA_runner.wdl` gets an optional output,
-   `File? LRAA_gene_body_tracking = "~{prefix}.~{suffix}.quant.gene_body.tracking.gz"`.
-   `LRAA.wdl` concatenates it across `by_chromosome` scatters (reads do not span
-   chromosomes) and across `LRAA_chunk_scatter.wdl`'s merge
-   (`util/misc/merge_chunk_outputs.py` calls `ChunkedRun.merge_gene_body_tracking`, which
-   is keyed on the files, not on config).
-3. **Matrix builder task.** Add a `BuildGeneBodyMatrices` task next to
-   `subwdls/LRAA-build_sparse_matrices_from_tracking.wdl`. It runs the new builder and
-   returns gene_full and S/U/A tarballs. The shard path (`sc_sparse_from_shards`,
-   `tracking_to_shard_sparse.py`) needs either per-shard gene-body matrices or this
-   post-merge build. The post-merge build is simpler; the builder first needs
-   `LevelAccumulator`'s chunked accumulation for genome scale.
-4. **Clustering input.** In `LRAA-singlecell.wdl`, when `single_nucleus` is true,
-   `gene_sparse_for_clustering` (and `FilterGoodCells`' gene input) takes the gene_full
-   tarball instead of `init_sc_gene_tgz`. Seurat's `percent.mt` works because chrM now
-   writes rows.
-5. **Blocker: the init pass is discovery, not quant-only.** `LRAA_init` runs ref-guided or
-   de novo discovery, and clustering reads its matrices. Gene-body counting must therefore
-   be wired into discovery's final quant first:
-   - pass `gene_body_fh` through `run_transcript_assembly` and build the index from the
-     models being reported (their gene ids are what the tracking file uses), not from the
-     reference;
-   - `ChunkedRun.merge_gene_body_tracking` must apply discovery's per-unit gene-id
-     namespacing (`merged_id_plan` / `mapped_id`), which the quant-only merge does not need;
-   - de novo models carry no GTF tags, so readthrough exclusion applies only to reference
-     genes in ref-guided mode.
-
-   The alternative avoids touching discovery: in single-nucleus mode, add a quant-only pass
-   against the reference GTF just for the clustering matrix. That costs one more
-   whole-library pass.
-6. **Final quant.** `LRAA_final_quant` in the cluster-guided workflow is already quant-only.
-   With step 2 and `final_quant_config_update_json = {"gene_body_counts": true}`, it would
-   give the final per-cell gene_full and S/U/A matrices next to the existing outputs.
+1. **Gene-body counts in both whole-library passes.** `LRAA_runner.wdl`,
+   `LRAA_chunk_scatter.wdl` and `LRAA.wdl` take `Boolean gene_body_counts`. The runner
+   task merges `"gene_body_counts": true` into its own config file (the chunk leaf into its
+   worker config), so the caller's `config_update_json` passes through untouched. The init
+   pass gets it from `sc_nucseq` in every mode (discovery via the hook above, quant-only
+   directly); the cluster-guided final quant gets it too; the per-cluster discovery runs
+   do not. `init_config_update_json` stays unset, so `reuse_init_as_final_quant` (quant-only
+   cluster-guided) still applies, and it hands the init pass's gene-body sidecar and
+   matrices down with the rest.
+2. **Merging the sidecar.** The runner emits `File? LRAA_gene_body_tracking`. `LRAA.wdl`
+   concatenates the per-chromosome sidecars (`mergeGeneBodyTracking`,
+   `util/misc/concat_gene_body_tracking.py`; it fails when a shard's is missing), the
+   by_chunk merge stages and merges the units' sidecars, and `scattering = off` publishes
+   its own. `mergedGeneBodyTracking` is the result.
+3. **One matrix build, either way the standard matrices are built.**
+   `sc_build_gene_body_sparse` (in `LRAA-build_sparse_matrices_from_tracking.wdl`) runs the
+   builder over the merged sidecar and `util/sc/gene_body_cell_stats.py` over its output.
+   It does not care whether the standard matrices came from shards
+   (`sc_sparse_from_shards`) or the library-wide build. Outputs: gene_full and S/U/A
+   tarballs, and a per-barcode table (`gene_full`, `spliced`, `unspliced`, `ambiguous`,
+   `n_genes_full`, `spliced_frac`, `unspliced_frac`).
+4. **Cell calling and clustering on gene_full.** `FilterGoodCells` takes
+   `gene_full_sparse_tar_gz`: emptyDrops then runs on gene_full, and the standard gene,
+   isoform and splice-pattern matrices are filtered to its cells
+   (`filter_good_cells.R --gene_matrix_dir`). Seurat clusters the (filtered) gene_full
+   with `min_features_nucseq` (1000) and `--nucseq`: variable genes are ranked within 10
+   quantile bins of log10 gene span by the z-score of vst's standardized variance, as
+   mean.var.plot z-scores dispersion within bins of mean. Spans come from the GTF the genes
+   were named from (`initial_annot_gtf` in quant-only, the init GTF in discovery) through
+   `util/sc/gtf_gene_spans.py`, which uses LRAA's `symbol^id` feature naming. The chosen
+   genes and their bins are written out. With `sc_nucseq` off, the R scripts take their old
+   path.
+5. **Final quant and symbols.** `LRAA-cell_cluster_guided.wdl` (`sc_nucseq` input) builds
+   the same matrices and table from the final quant. `Incorporate_gene_symbols.wdl` takes
+   the four gene-body matrices as optional inputs and names them like the gene matrix.
 
 ## 5. Prototype results (small data only, workstation, every LRAA run under a 20 GB memory cap)
 
@@ -422,9 +446,7 @@ What changed between the columns:
    Documented (section 1 and the module docstring).
 5. chrM: the `--oversimplify` path writes gene-body rows. Done.
 6. gene_full sits beside the gene matrix. In single-nucleus mode clustering uses gene_full.
-   The local pieces are done; the WDL and clustering plumbing is the plan in section 4. It is
-   not implemented, because it needs workflow runs to validate and the discovery-mode hook
-   first.
+   Done: `sc_nucseq` in the single-cell workflow (section 4), with the discovery-mode hook.
 7. Readthrough-tagged genes are excluded as candidates, on by default
    (`gene_body_exclude_readthrough_genes`), with GTF tags now parsed. Done.
 8. The 3'-end rule moved after the weighting. It decided 0 reads in the ALS window, before
@@ -432,7 +454,8 @@ What changed between the columns:
 
 ## 7. Still open
 
-- The single-nucleus WDL plumbing and the discovery-mode final-quant hook (section 4 plan).
+- A Terra or fleet-VM run of `sc_nucseq` on a full single-nucleus sample (only the 2 Mb
+  test fixture has been run through the workflow).
 - A genome-scale matrix builder (`LevelAccumulator` reuse).
 - Optionally, a per-unit gene-body summary TSV (the counts are logged per contig-strand now).
 - Running on the full ALS sample on a fleet VM or Terra (never on this workstation), and

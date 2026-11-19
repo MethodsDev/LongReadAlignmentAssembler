@@ -67,6 +67,11 @@ task LRAA_runner_task {
         # '{"require_cap_for_new_TSS": true}', handed to LRAA as --config_update.
         # Settings with no CLI flag reach a workflow run this way, per phase.
         String? config_update_json
+        # Adds "gene_body_counts": true to the config above (single-nucleus mode): LRAA
+        # then also writes <prefix>.quant.gene_body.tracking.gz, a gene assignment for
+        # every read, intronic ones included. Merged here, in the task, so a caller's own
+        # config_update_json passes through untouched.
+        Boolean gene_body_counts = false
         Float? min_alt_splice_freq
         Float? min_alt_unspliced_freq
 
@@ -328,6 +333,17 @@ task LRAA_runner_task {
         cat > "$config_update_file" <<'LRAA_CONFIG_UPDATE_EOF'
 ~{default="" config_update_json}
 LRAA_CONFIG_UPDATE_EOF
+        if [[ "~{gene_body_counts}" == "true" ]]; then
+            python3 - "$config_update_file" <<'GENE_BODY_PY'
+import json, sys
+path = sys.argv[1]
+text = open(path).read().strip()
+cfg = json.loads(text) if text else {}
+cfg["gene_body_counts"] = True
+with open(path, "wt") as ofh:
+    print(json.dumps(cfg), file=ofh)
+GENE_BODY_PY
+        fi
 
         # --no_splice_collapsed_outputs below: the WORKFLOW owns those artifacts.
         # LRAA.wdl runs one splice_pattern_collapse task on the FINAL gtf, while this
@@ -358,7 +374,7 @@ LRAA_CONFIG_UPDATE_EOF
                                  ~{true="--no_filter_internal_priming" false='' no_filter_internal_priming} \
                                  ~{true="--no_filter_mismappings" false='' no_filter_mismappings} \
                                  ~{true="--no_weight_reads_by_3prime_agreement" false='' no_weight_reads_by_3prime_agreement} \
-                                 ~{if select_first([config_update_json, ""]) != "" then "--config_update \"$config_update_file\"" else ""} \
+                                 ~{if select_first([config_update_json, ""]) != "" || gene_body_counts then "--config_update \"$config_update_file\"" else ""} \
                                  ~{if defined(min_alt_splice_freq) then "--min_alt_splice_freq " + min_alt_splice_freq else ""} \
                                  ~{if defined(min_alt_unspliced_freq) then "--min_alt_unspliced_freq " + min_alt_unspliced_freq else ""} \
                                  ~{if defined(annot_gtf) then "--gtf " + annot_gtf else ""} \
@@ -488,6 +504,8 @@ LRAA_CONFIG_UPDATE_EOF
         # because no_chunk=true never enters the chunked driver and so places no
         # cuts; a single-chunk run does write one. See the command above.
         File? LRAA_shard_cut_plan = "~{output_prefix_use}.~{output_suffix}.shard_cut_plan.json"
+        # Only with gene_body_counts.
+        File? LRAA_gene_body_tracking = "~{output_prefix_use}.~{output_suffix}.quant.gene_body.tracking.gz"
     }
 
 
@@ -548,6 +566,7 @@ workflow LRAA_runner {
         Boolean? no_filter_internal_priming
         Boolean no_weight_reads_by_3prime_agreement = false
         String? config_update_json
+        Boolean gene_body_counts = false
         Float? min_alt_splice_freq
         Float? min_alt_unspliced_freq
 
@@ -605,6 +624,7 @@ workflow LRAA_runner {
             no_filter_internal_priming=no_filter_internal_priming,
             no_weight_reads_by_3prime_agreement=no_weight_reads_by_3prime_agreement,
             config_update_json=config_update_json,
+            gene_body_counts=gene_body_counts,
             min_alt_splice_freq=min_alt_splice_freq,
             min_alt_unspliced_freq=min_alt_unspliced_freq,
             cell_barcode_tag = cell_barcode_tag,
@@ -634,6 +654,7 @@ workflow LRAA_runner {
         File? LRAA_normalized_splice_graph_bai = LRAA_runner_task.LRAA_normalized_splice_graph_bai
         File? LRAA_chunk_report = LRAA_runner_task.LRAA_chunk_report
         File? LRAA_shard_cut_plan = LRAA_runner_task.LRAA_shard_cut_plan
+        File? LRAA_gene_body_tracking = LRAA_runner_task.LRAA_gene_body_tracking
     }
 
 }

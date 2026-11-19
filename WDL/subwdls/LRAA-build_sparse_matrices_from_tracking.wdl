@@ -345,3 +345,105 @@ task merge_sc_shard_sparse {
     disks: "local-disk ~{disksize} SSD"
   }
 }
+
+
+# ---------------------------------------------------------------------------
+# Single-nucleus mode: the gene-body matrices, from LRAA's gene-body sidecar
+# (<prefix>.quant.gene_body.tracking.gz, config gene_body_counts).
+#
+# One task over the run's merged sidecar, whichever way the standard matrices were
+# built (per-shard and merged, or library-wide): the sidecar is merged by LRAA.wdl in
+# every scattering mode, so this has one input shape. Writes gene_full (S + U + A,
+# intronic reads included) and the three splice-class matrices, which share one
+# feature and one barcode list, and the per-barcode table of their totals
+# (util/sc/gene_body_cell_stats.py).
+#
+# The builder accumulates one dict entry per (gene, barcode, class): memory follows
+# the nonzeros, not the reads (docs/single_nucleus_intronic_gene_counts.md).
+# ---------------------------------------------------------------------------
+
+task sc_build_gene_body_sparse {
+  input {
+    Int preemptible_tries = 3
+    String sample_id
+    File gene_body_tracking
+    String docker
+    Int memoryGB = 32
+    Int gzip_level = 1
+  }
+
+  Int disksize = 50 + ceil(3 * size(gene_body_tracking, "GB"))
+  String output_prefix = "~{sample_id}.LRAA.sc"
+    # Machine shape (v0.47.1, generated text, identical in every N2D task). cpu: and memory:
+    # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
+    # (miniwdl ignores predefinedMachineType). N2D rather than C3D because the task uses at most
+    # 2 cores, and C3D has no 2-core shape, or stays on an HDD disk, and Compute Engine docs
+    # appear not to offer pd-standard on C3D (unprobed).
+    Int shape_cpu = 1
+    Int shape_memGB = memoryGB
+    Int shape_cpu_tier = if shape_cpu <= 2 then 2
+        else if shape_cpu <= 4 then 4
+        else if shape_cpu <= 8 then 8
+        else if shape_cpu <= 16 then 16
+        else if shape_cpu <= 32 then 32
+        else if shape_cpu <= 48 then 48
+        else if shape_cpu <= 64 then 64
+        else if shape_cpu <= 80 then 80
+        else 96
+    Int shape_mem_tier = if shape_memGB <= 16 then 2
+        else if shape_memGB <= 32 then 4
+        else if shape_memGB <= 64 then 8
+        else if shape_memGB <= 128 then 16
+        else if shape_memGB <= 256 then 32
+        else if shape_memGB <= 384 then 48
+        else if shape_memGB <= 512 then 64
+        else if shape_memGB <= 640 then 80
+        else 96
+    Int shape_cores = if shape_cpu_tier >= shape_mem_tier then shape_cpu_tier else shape_mem_tier
+    String machine_type = if shape_memGB <= shape_cores then "n2d-highcpu-~{shape_cores}"
+        else if shape_memGB <= shape_cores * 4 then "n2d-standard-~{shape_cores}"
+        else "n2d-highmem-~{shape_cores}"
+
+
+  command <<<
+    set -ex
+
+    gene_body_tracking_to_sparse_matrix.py \
+      --gene_body_tracking ~{gene_body_tracking} \
+      --output_prefix ~{output_prefix} \
+      --gzip_level ~{gzip_level}
+
+    gene_body_cell_stats.py \
+      --sparseM_prefix ~{output_prefix} \
+      --output "~{output_prefix}.gene_body_cell_stats.tsv.gz"
+
+    # "." rather than "^" in the archive names; see sc_build_sparse_matrices_from_tracking.
+    for level in gene_full gene_spliced gene_unspliced gene_ambiguous; do
+      if command -v pigz >/dev/null 2>&1; then
+        tar --use-compress-program="pigz -~{gzip_level}" \
+            -cvf "~{output_prefix}.${level}-sparseM.tar.gz" "~{output_prefix}^${level}-sparseM"
+      else
+        tar -zcvf "~{output_prefix}.${level}-sparseM.tar.gz" "~{output_prefix}^${level}-sparseM"
+      fi
+    done
+  >>>
+
+  output {
+    File gene_full_sparse_dir_tgz = "~{output_prefix}.gene_full-sparseM.tar.gz"
+    File gene_spliced_sparse_dir_tgz = "~{output_prefix}.gene_spliced-sparseM.tar.gz"
+    File gene_unspliced_sparse_dir_tgz = "~{output_prefix}.gene_unspliced-sparseM.tar.gz"
+    File gene_ambiguous_sparse_dir_tgz = "~{output_prefix}.gene_ambiguous-sparseM.tar.gz"
+    File cell_stats_tsv = "~{output_prefix}.gene_body_cell_stats.tsv.gz"
+  }
+
+  runtime {
+
+      predefinedMachineType: machine_type
+
+      preemptible: preemptible_tries
+    docker: docker
+    cpu: 1
+    memory: "~{memoryGB} GiB"
+    disks: "local-disk ~{disksize} SSD"
+  }
+}

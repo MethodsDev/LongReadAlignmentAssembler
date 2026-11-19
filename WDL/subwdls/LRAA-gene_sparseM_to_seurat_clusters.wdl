@@ -16,6 +16,14 @@ workflow GeneSparseM_To_SeuratClusters {
     Float resolution = 0.6
     Int n_variable_features = 2000
     Int seed = 1
+
+    # Single-nucleus input (gene_full counts, intronic reads included). Variable genes
+    # are then ranked within bins of log10 gene span, since intronic reads make long
+    # genes look variable; spans come from gene_spans_gtf, the GTF the counted genes
+    # were named from. The caller sets min_features (about 1000 for gene_full).
+    Boolean nucseq = false
+    File? gene_spans_gtf
+    Int span_bins = 10
   }
 
   String output_prefix = sample_id + ".genes"
@@ -33,7 +41,10 @@ workflow GeneSparseM_To_SeuratClusters {
       npcs = npcs,
       resolution = resolution,
       n_variable_features = n_variable_features,
-      seed = seed
+      seed = seed,
+      nucseq = nucseq,
+      gene_spans_gtf = gene_spans_gtf,
+      span_bins = span_bins
   }
 
   output {
@@ -42,6 +53,8 @@ workflow GeneSparseM_To_SeuratClusters {
     File umap_pdf = run_seurat.umap_pdf
     File umap_with_clusters_tsv = run_seurat.umap_with_clusters_tsv
     File cluster_assignments_tsv = run_seurat.cluster_assignments_tsv
+    File? gene_spans_tsv = run_seurat.gene_spans_tsv
+    File? variable_features_tsv = run_seurat.variable_features_tsv
   }
 }
 
@@ -62,6 +75,9 @@ task run_seurat_from_gene_sparseM {
     Float resolution
     Int n_variable_features
     Int seed
+    Boolean nucseq = false
+    File? gene_spans_gtf
+    Int span_bins = 10
   }
 
   Int disksize = 50 + ceil(2 * size(gene_sparse_tar_gz, "GB"))
@@ -105,6 +121,12 @@ task run_seurat_from_gene_sparseM {
     mkdir gene-sparseM
     tar -xzf ~{gene_sparse_tar_gz} --no-same-owner --strip-components=1 -C gene-sparseM
 
+    NUCSEQ_ARGS=""
+    if [[ "~{nucseq}" == "true" ]]; then
+      gtf_gene_spans.py --gtf ~{gene_spans_gtf} --output ~{output_prefix}.gene_spans.tsv
+      NUCSEQ_ARGS="--nucseq --gene_spans ~{output_prefix}.gene_spans.tsv --span_bins ~{span_bins}"
+    fi
+
     # Run the Seurat pipeline script (executable on PATH)
     gene_sparseM_to_seurat_clusters_and_umap.R \
       --sparseM_dir gene-sparseM \
@@ -117,6 +139,7 @@ task run_seurat_from_gene_sparseM {
       --resolution ~{resolution} \
       --n_variable_features ~{n_variable_features} \
       --seed ~{seed} \
+      ${NUCSEQ_ARGS} \
       > seurat_run.log 2>&1 || {
         echo "Seurat script failed; tailing log" >&2
         tail -n 200 seurat_run.log >&2
@@ -130,6 +153,8 @@ task run_seurat_from_gene_sparseM {
     File umap_pdf = "~{output_prefix}-umap.pdf"
     File umap_with_clusters_tsv = "~{output_prefix}-cell_cluster_assignments.wUMAP.tsv"
     File cluster_assignments_tsv = "~{output_prefix}-cell_cluster_assignments.tsv"
+    File? gene_spans_tsv = "~{output_prefix}.gene_spans.tsv"
+    File? variable_features_tsv = "~{output_prefix}-variable_features.length_aware.tsv"
   }
 
   runtime {

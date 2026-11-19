@@ -27,6 +27,12 @@ parser$add_argument("--splice_pattern_matrix_dir", default=NULL,
                     help="Optional: Input directory for splice pattern sparse matrix to filter with same cells")
 parser$add_argument("--splice_pattern_output_dir", default=NULL, 
                     help="Optional: Output directory for filtered splice pattern matrix")
+parser$add_argument("--gene_matrix_dir", default=NULL,
+                    help=paste("Optional: the standard gene matrix, filtered to the same cells,",
+                               "when --matrix_dir holds a different basis (single-nucleus mode",
+                               "calls cells on gene_full, which counts intronic reads)"))
+parser$add_argument("--gene_output_dir", default=NULL,
+                    help="Optional: Output directory for the filtered --gene_matrix_dir")
 args <- parser$parse_args()
 
 # Extract arguments
@@ -39,6 +45,8 @@ isoform_matrix_dir <- args$isoform_matrix_dir
 isoform_output_dir <- args$isoform_output_dir
 splice_pattern_matrix_dir <- args$splice_pattern_matrix_dir
 splice_pattern_output_dir <- args$splice_pattern_output_dir
+gene_matrix_dir <- args$gene_matrix_dir
+gene_output_dir <- args$gene_output_dir
 
 # Validate input directory
 if (!dir.exists(matrix_dir)) {
@@ -275,6 +283,14 @@ if (!is.null(splice_pattern_matrix_dir) && !is.null(splice_pattern_output_dir)) 
   message("Filtering splice pattern sparse matrix")
   message("========================================")
   filter_additional_matrix(splice_pattern_matrix_dir, splice_pattern_output_dir, filtered_barcodes)
+}
+
+# Filter the standard gene matrix if it is not the one the cells were called on
+if (!is.null(gene_matrix_dir) && !is.null(gene_output_dir)) {
+  message("\n========================================")
+  message("Filtering gene sparse matrix")
+  message("========================================")
+  filter_additional_matrix(gene_matrix_dir, gene_output_dir, filtered_barcodes)
 }
 
 message("\n========================================")

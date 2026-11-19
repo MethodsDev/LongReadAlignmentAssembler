@@ -84,6 +84,9 @@ workflow LRAA_chunk_scatter {
         # '{"require_cap_for_new_TSS": true}'. Merged into the same worker config
         # file as the override above (and applied after it), for every leaf.
         String? config_update_json
+        # Adds "gene_body_counts": true to that worker config (single-nucleus mode); the
+        # leaves' gene-body sidecars are then merged into mergedGeneBodyTracking.
+        Boolean gene_body_counts = false
         Float? approx_MB_per_cut
         Float? approx_MB_per_cut_wiggle_window
         File? cell_list
@@ -307,6 +310,7 @@ workflow LRAA_chunk_scatter {
                 polyA_known = polyA_known,
                 no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
                 config_update_json = config_update_json,
+                gene_body_counts = gene_body_counts,
                 chunkCpu = chunkCpu_use,
                 chunkMemoryGB = chunkMemoryGB_use,
                 chunkPreemptible = chunkPreemptible,
@@ -321,6 +325,7 @@ workflow LRAA_chunk_scatter {
             quantTrackingFiles = flatten(process_chunk.unitQuantTracking),
             gtfFiles = flatten(process_chunk.unitGtf),
             readAssignmentSummaries = flatten(process_chunk.unitReadAssignmentSummary),
+            geneBodyTrackingFiles = flatten(process_chunk.unitGeneBodyTracking),
             discovery = discovery,
             outputFilePrefix = LRAA_output_prefix,
             mergeCpu = mergeCpu_use,
@@ -333,6 +338,7 @@ workflow LRAA_chunk_scatter {
         File mergedQuantTracking = merge_chunks.mergedQuantTracking
         File mergedTpmAudit = merge_chunks.mergedTpmAudit
         File mergedReadAssignmentSummary = merge_chunks.mergedReadAssignmentSummary
+        File? mergedGeneBodyTracking = merge_chunks.mergedGeneBodyTracking
         File? mergedGTF = merge_chunks.mergedGTF
         File mergeResult = merge_chunks.mergeResult
         File chunkPlan = make_chunks.chunkPlan
@@ -586,6 +592,7 @@ task process_chunk {
         File? polyA_known
         Boolean no_weight_reads_by_3prime_agreement = false
         String? config_update_json
+        Boolean gene_body_counts = false
         Int chunkCpu
         Int chunkMemoryGB
         Int chunkPreemptible
@@ -662,6 +669,15 @@ if extra:
     with open("worker_config.json", "w") as fh:
         json.dump(cfg, fh, sort_keys=True)
 PY
+    if [[ "~{gene_body_counts}" == "true" ]]; then
+        python3 - <<'PY'
+import json, os
+cfg = json.load(open("worker_config.json")) if os.path.exists("worker_config.json") else {}
+cfg["gene_body_counts"] = True
+with open("worker_config.json", "w") as fh:
+    json.dump(cfg, fh, sort_keys=True)
+PY
+    fi
 
     /usr/local/src/LRAA/pylib/ChunkedRun.py \
         --output_dir work \
@@ -678,7 +694,7 @@ PY
         ~{if defined(cell_list) then "--cell_list " + cell_list else ""} \
         ~{if (cell_barcode_tag != "CB") then "--cell_barcode_tag " + cell_barcode_tag else ""} \
         ~{if (read_umi_tag != "XM") then "--read_umi_tag " + read_umi_tag else ""} \
-        ~{if (no_weight_reads_by_3prime_agreement || select_first([config_update_json, ""]) != "") then "--worker_config_json \"$PWD/worker_config.json\"" else ""}
+        ~{if (no_weight_reads_by_3prime_agreement || select_first([config_update_json, ""]) != "" || gene_body_counts) then "--worker_config_json \"$PWD/worker_config.json\"" else ""}
 
     # Rename every unit artifact to <unit_id>.<suffix>. The merge addresses inputs as
     # quant_prefix + ".quant.expr" etc, so unit-scoped basenames let the merge task drop
@@ -702,6 +718,10 @@ for u in doc["units"]:
         raise SystemExit("unit {} produced no quant.tracking".format(uid))
     if os.path.exists(pfx + ".gtf"):
         shutil.copy(pfx + ".gtf", os.path.join("staged", uid + ".gtf"))
+    # gene_body_counts only; the merge requires it of every unit or of none
+    if os.path.exists(pfx + ".quant.gene_body.tracking.gz"):
+        shutil.copy(pfx + ".quant.gene_body.tracking.gz",
+                    os.path.join("staged", uid + ".quant.gene_body.tracking.gz"))
     # UNCONDITIONAL, like quant.expr. Every work unit writes a read-assignment
     # summary now, including one with nothing to quantify -- run_quant_only's early
     # returns write an all-zero summary rather than returning before the writer. So
@@ -750,6 +770,7 @@ PY
         Array[File] unitQuantTracking = glob("staged/*.quant.tracking*")
         Array[File] unitGtf = glob("staged/*.gtf")
         Array[File] unitReadAssignmentSummary = glob("staged/*.read_assignment.summary.tsv")
+        Array[File] unitGeneBodyTracking = glob("staged/*.quant.gene_body.tracking.gz")
         File chunkLog = "work/logs/chunk_~{chunkId}.log"
         # Resource telemetry, one row per chunk plus LRAA's own per-unit series.
         # Gathered by the caller so a whole-genome run yields a table of what its
@@ -777,6 +798,7 @@ task merge_chunks {
         Array[File] quantTrackingFiles
         Array[File] gtfFiles
         Array[File] readAssignmentSummaries
+        Array[File] geneBodyTrackingFiles = []
         Boolean discovery
         String outputFilePrefix
         Int mergeCpu
@@ -824,7 +846,7 @@ task merge_chunks {
     set -euo pipefail
 
     mkdir -p staged work
-    for f in ~{sep=' ' quantExprFiles} ~{sep=' ' quantTrackingFiles} ~{sep=' ' gtfFiles} ~{sep=' ' readAssignmentSummaries}; do
+    for f in ~{sep=' ' quantExprFiles} ~{sep=' ' quantTrackingFiles} ~{sep=' ' gtfFiles} ~{sep=' ' readAssignmentSummaries} ~{sep=' ' geneBodyTrackingFiles}; do
         cp "$f" "staged/$(basename "$f")"
     done
 
@@ -890,6 +912,9 @@ PY
     if [[ "~{discovery}" == "true" ]]; then
         mv work/merged/chunked.gtf "~{outputFilePrefix}.gtf"
     fi
+    if [[ -f work/merged/chunked.quant.gene_body.tracking.gz ]]; then
+        mv work/merged/chunked.quant.gene_body.tracking.gz "~{outputFilePrefix}.quant.gene_body.tracking.gz"
+    fi
 
     # The merge is where a whole-genome run's peak lives: it pools every unit's
     # tracking rows through an external sort, and the number that decides its
@@ -912,6 +937,7 @@ PY
         File mergedQuantTracking = "~{outputFilePrefix}.quant.tracking.gz"
         File mergedTpmAudit = "~{outputFilePrefix}.quant.expr.tpm_chunk_local.tsv"
         File mergedReadAssignmentSummary = "~{outputFilePrefix}.read_assignment.summary.tsv"
+        File? mergedGeneBodyTracking = "~{outputFilePrefix}.quant.gene_body.tracking.gz"
         File? mergedGTF = "~{outputFilePrefix}.gtf"
         File mergeResult = "~{outputFilePrefix}.merge_result.json"
         File mergeResources = "merge_chunks_resources.tsv"

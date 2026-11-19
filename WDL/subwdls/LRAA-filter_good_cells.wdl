@@ -6,6 +6,10 @@ workflow FilterGoodCells {
     File gene_sparse_tar_gz
     File? isoform_sparse_tar_gz
     File? splice_pattern_sparse_tar_gz
+    # Single-nucleus mode: call cells on this matrix (gene_full, intronic reads
+    # included) instead of gene_sparse_tar_gz, which is then filtered to the same
+    # cells like the isoform and splice-pattern matrices.
+    File? gene_full_sparse_tar_gz
     String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:latest"
     Int memoryGB = 32
     
@@ -29,6 +33,7 @@ workflow FilterGoodCells {
       gene_sparse_tar_gz = gene_sparse_tar_gz,
       isoform_sparse_tar_gz = isoform_sparse_tar_gz,
       splice_pattern_sparse_tar_gz = splice_pattern_sparse_tar_gz,
+      gene_full_sparse_tar_gz = gene_full_sparse_tar_gz,
       output_prefix = output_prefix,
       docker = docker,
       memoryGB = memoryGB,
@@ -41,6 +46,7 @@ workflow FilterGoodCells {
     File filtered_gene_sparse_tar_gz = run_filter_good_cells.filtered_gene_sparse_tar_gz
     File? filtered_isoform_sparse_tar_gz = run_filter_good_cells.filtered_isoform_sparse_tar_gz
     File? filtered_splice_pattern_sparse_tar_gz = run_filter_good_cells.filtered_splice_pattern_sparse_tar_gz
+    File? filtered_gene_full_sparse_tar_gz = run_filter_good_cells.filtered_gene_full_sparse_tar_gz
     File good_cell_barcodes = run_filter_good_cells.good_cell_barcodes
     File filtering_summary = run_filter_good_cells.filtering_summary
   }
@@ -53,6 +59,7 @@ task run_filter_good_cells {
     File gene_sparse_tar_gz
     File? isoform_sparse_tar_gz
     File? splice_pattern_sparse_tar_gz
+    File? gene_full_sparse_tar_gz
     String output_prefix
     String docker
     Int memoryGB = 32
@@ -61,7 +68,7 @@ task run_filter_good_cells {
     Int? lower_threshold
   }
 
-  Int disksize = 50 + ceil(2 * (size(gene_sparse_tar_gz, "GB") + size(isoform_sparse_tar_gz, "GB") + size(splice_pattern_sparse_tar_gz, "GB")))
+  Int disksize = 50 + ceil(2 * (size(gene_sparse_tar_gz, "GB") + size(isoform_sparse_tar_gz, "GB") + size(splice_pattern_sparse_tar_gz, "GB") + size(gene_full_sparse_tar_gz, "GB")))
     # Machine shape (v0.47.1, generated text, identical in every N2D task). cpu: and memory:
     # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
     # (miniwdl ignores predefinedMachineType). N2D rather than C3D because the task uses at most
@@ -103,6 +110,19 @@ task run_filter_good_cells {
     # Create output directory for filtered gene matrix
     mkdir gene-sparseM-filtered
 
+    # The matrix emptyDrops calls cells on: the gene matrix, or in single-nucleus mode
+    # gene_full, with the gene matrix then filtered to its cells.
+    BASIS_DIR=gene-sparseM-input
+    BASIS_OUT=gene-sparseM-filtered
+    GENE_ARGS=""
+    if [ -n "~{gene_full_sparse_tar_gz}" ]; then
+      mkdir gene_full-sparseM-input gene_full-sparseM-filtered
+      tar -xzf ~{gene_full_sparse_tar_gz} --no-same-owner --strip-components=1 -C gene_full-sparseM-input
+      BASIS_DIR=gene_full-sparseM-input
+      BASIS_OUT=gene_full-sparseM-filtered
+      GENE_ARGS="--gene_matrix_dir gene-sparseM-input --gene_output_dir gene-sparseM-filtered"
+    fi
+
     # Prepare optional arguments for isoform and splice pattern matrices
     ISOFORM_ARGS=""
     SPLICE_PATTERN_ARGS=""
@@ -125,13 +145,14 @@ task run_filter_good_cells {
 
     # Run the filter_good_cells.R script
     filter_good_cells.R \
-      --matrix_dir gene-sparseM-input \
-      --output_dir gene-sparseM-filtered \
+      --matrix_dir ${BASIS_DIR} \
+      --output_dir ${BASIS_OUT} \
       --fdr_threshold ~{fdr_threshold} \
       --seed ~{seed} \
       ~{if defined(lower_threshold) then "--lower " + lower_threshold else ""} \
       ${ISOFORM_ARGS} \
       ${SPLICE_PATTERN_ARGS} \
+      ${GENE_ARGS} \
       > filter_good_cells.log 2>&1 || {
         echo "filter_good_cells.R failed; tailing log" >&2
         tail -n 200 filter_good_cells.log >&2
@@ -139,13 +160,17 @@ task run_filter_good_cells {
       }
 
     # Extract the good cell barcodes to a standalone file
-    zcat gene-sparseM-filtered/barcodes.tsv.gz > ~{output_prefix}.good_cell_barcodes.txt
+    zcat ${BASIS_OUT}/barcodes.tsv.gz > ~{output_prefix}.good_cell_barcodes.txt
 
     # Tar and compress the filtered sparse matrix directory
     tar -czf ~{output_prefix}.gene-sparseM.tar.gz gene-sparseM-filtered
 
     # Copy the summary file to the expected output location
-    cp gene-sparseM-filtered/filtering_summary.tsv ~{output_prefix}.filtering_summary.tsv
+    cp ${BASIS_OUT}/filtering_summary.tsv ~{output_prefix}.filtering_summary.tsv
+
+    if [ -d gene_full-sparseM-filtered ]; then
+      tar -czf ~{output_prefix}.gene_full-sparseM.tar.gz gene_full-sparseM-filtered
+    fi
 
     # Tar and compress the filtered isoform matrix if it was processed
     if [ -d isoform-sparseM-filtered ]; then
@@ -162,6 +187,7 @@ task run_filter_good_cells {
     File filtered_gene_sparse_tar_gz = "~{output_prefix}.gene-sparseM.tar.gz"
     File? filtered_isoform_sparse_tar_gz = "~{output_prefix}.isoform-sparseM.tar.gz"
     File? filtered_splice_pattern_sparse_tar_gz = "~{output_prefix}.splice_pattern-sparseM.tar.gz"
+    File? filtered_gene_full_sparse_tar_gz = "~{output_prefix}.gene_full-sparseM.tar.gz"
     File good_cell_barcodes = "~{output_prefix}.good_cell_barcodes.txt"
     File filtering_summary = "~{output_prefix}.filtering_summary.tsv"
   }

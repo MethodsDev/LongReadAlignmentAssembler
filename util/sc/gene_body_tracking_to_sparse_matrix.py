@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Cell x gene matrices from LRAA's gene-body sidecar (<prefix>.quant.gene_body.tracking.gz).
 
-Written by LRAA quant-only when config["gene_body_counts"] is on
+Written by LRAA (quant-only, or a discovery run's final quant) when
+config["gene_body_counts"] is on
 (docs/single_nucleus_intronic_gene_counts.md). Each row is one (read, gene) with
 frac_assigned and a splice class S / U / A.
 

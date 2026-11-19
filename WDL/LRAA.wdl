@@ -156,6 +156,12 @@ workflow LRAA_wf {
         # by_chunk. This is how a setting with no CLI flag is set from a workflow, and
         # how a calling workflow gives its phases different settings.
         String? config_update_json
+        # Gene-body counts (single-nucleus mode): every read of the run's final quant,
+        # intronic ones included, credited to a gene and classed spliced / unspliced /
+        # ambiguous, in mergedGeneBodyTracking. Sets LRAA's gene_body_counts config key
+        # in every scattering mode, merged into config_update_json there rather than
+        # here. Isoform outputs are unchanged by it.
+        Boolean gene_body_counts = false
         Boolean quant_only = false
         # TSS cap calibration (v0.47.0): whether the library carries the untemplated-G
         # cap signature, and its baseline, decided ONCE on the whole bam before any
@@ -488,6 +494,7 @@ workflow LRAA_wf {
                 polyA_known = polyA_known,
                 no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
                 config_update_json = effective_config_update_json,
+                gene_body_counts = gene_body_counts,
                 quant_only = quant_only,
                 HiFi = HiFi,
                 min_mapping_quality = min_mapping_quality,
@@ -676,6 +683,7 @@ workflow LRAA_wf {
                     no_EM = no_EM,
                     no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
                     config_update_json = effective_config_update_json,
+                    gene_body_counts = gene_body_counts,
                     retain_normalized_splice_graph_bam = retain_normalized_splice_graph_bam,
                     rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                     cell_barcode_tag = cell_barcode_tag,
@@ -722,6 +730,18 @@ workflow LRAA_wf {
                 summaryFiles = select_all(LRAA_scatter.LRAA_read_assignment_summary),
                 outputFilePrefix = LRAA_output_prefix,
                 docker = docker
+        }
+
+        # One sidecar per shard; a read belongs to one contig, so they concatenate.
+        # The task refuses a shard set with any sidecar missing.
+        if (gene_body_counts) {
+            call mergeGeneBodyTracking {
+                input:
+                    geneBodyTrackingFiles = select_all(LRAA_scatter.LRAA_gene_body_tracking),
+                    numShards = num_chromosomes,
+                    outputFilePrefix = LRAA_output_prefix,
+                    docker = docker
+            }
         }
 
         # Only merge GTFs when not in quant-only mode
@@ -778,6 +798,7 @@ workflow LRAA_wf {
                 no_EM = no_EM,
                 no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
                 config_update_json = effective_config_update_json,
+                gene_body_counts = gene_body_counts,
                 retain_normalized_splice_graph_bam = retain_normalized_splice_graph_bam,
                 rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                 cell_barcode_tag = cell_barcode_tag,
@@ -873,6 +894,12 @@ workflow LRAA_wf {
         }
     }
 
+    # Three producers, as for the tracking file. select_first so that a run asked for
+    # gene-body counts that comes back without them fails here, not downstream.
+    if (gene_body_counts) {
+        File gene_body_tracking_merged = select_first([chunk_scatter.mergedGeneBodyTracking, mergeGeneBodyTracking.mergedGeneBodyTrackingFile, LRAA_direct.LRAA_gene_body_tracking])
+    }
+
     output {
     # TSS cap calibration: the decision's config keys (for sibling runs of the same
     # library) and its report: decision and statistics, per-peak capped-fraction
@@ -886,6 +913,10 @@ workflow LRAA_wf {
     # complete replacement for the merged quant -- no requant needed).
     File mergedQuantExpr = select_first([alignment_mismapping_filter.filteredQuantExpr, chunk_scatter.mergedQuantExpr, mergeQuantResults.mergedQuantExprFile, LRAA_direct.LRAA_quant_expr])
     File mergedQuantTracking = select_first([chunk_scatter.mergedQuantTracking, mergeQuantResults.mergedQuantTrackingFile, LRAA_direct.LRAA_quant_tracking])
+    # gene_body_counts only: <prefix>.quant.gene_body.tracking.gz, one row per (read,
+    # gene) of the same pass that wrote mergedQuantTracking. Not touched by the
+    # mismapping filter, like the tracking file.
+    File? mergedGeneBodyTracking = gene_body_tracking_merged
     File? mergedGTF = if (!quant_only) then select_first([alignment_mismapping_filter.filteredGtf, chunk_scatter.mergedGTF, merge_GTFs.mergedGtfFile, LRAA_direct.LRAA_gtf]) else LRAA_direct.LRAA_gtf
     File? mismappingFilterLog = alignment_mismapping_filter.filterLog
     # by_chunk has no per-SHARD summaries to surface: its units are chunks, and
@@ -1492,6 +1523,79 @@ task mergeQuantResults {
         disks: "local-disk " + ceil(mergeDiskRawGB) + " SSD"
     }
 }
+
+task mergeGeneBodyTracking {
+    input {
+        Int preemptible_tries = 3
+        Array[File] geneBodyTrackingFiles
+        Int numShards
+        String outputFilePrefix
+        String docker
+    }
+
+    Int disksize = 20 + ceil(2.2 * size(geneBodyTrackingFiles, "GB"))
+    # Machine shape (v0.47.1, generated text, identical in every N2D task). cpu: and memory:
+    # stay as they are, so miniwdl's reservations do not change; this only names the Terra VM
+    # (miniwdl ignores predefinedMachineType). N2D rather than C3D because the task uses at most
+    # 2 cores, and C3D has no 2-core shape, or stays on an HDD disk, and Compute Engine docs
+    # appear not to offer pd-standard on C3D (unprobed).
+    Int shape_cpu = 1
+    Int shape_memGB = 2
+    Int shape_cpu_tier = if shape_cpu <= 2 then 2
+        else if shape_cpu <= 4 then 4
+        else if shape_cpu <= 8 then 8
+        else if shape_cpu <= 16 then 16
+        else if shape_cpu <= 32 then 32
+        else if shape_cpu <= 48 then 48
+        else if shape_cpu <= 64 then 64
+        else if shape_cpu <= 80 then 80
+        else 96
+    Int shape_mem_tier = if shape_memGB <= 16 then 2
+        else if shape_memGB <= 32 then 4
+        else if shape_memGB <= 64 then 8
+        else if shape_memGB <= 128 then 16
+        else if shape_memGB <= 256 then 32
+        else if shape_memGB <= 384 then 48
+        else if shape_memGB <= 512 then 64
+        else if shape_memGB <= 640 then 80
+        else 96
+    Int shape_cores = if shape_cpu_tier >= shape_mem_tier then shape_cpu_tier else shape_mem_tier
+    String machine_type = if shape_memGB <= shape_cores then "n2d-highcpu-~{shape_cores}"
+        else if shape_memGB <= shape_cores * 4 then "n2d-standard-~{shape_cores}"
+        else "n2d-highmem-~{shape_cores}"
+
+
+    command <<<
+        set -euo pipefail
+
+        # Every shard writes one when the key is on, header-only if it saw no reads, so
+        # a short list is a shard that lost its sidecar, not one with nothing to say.
+        if [[ ~{length(geneBodyTrackingFiles)} -ne ~{numShards} ]]; then
+            echo "gene-body sidecars from ~{length(geneBodyTrackingFiles)} of ~{numShards} shards" >&2
+            exit 1
+        fi
+
+        concat_gene_body_tracking.py \
+            --inputs ~{sep=' ' geneBodyTrackingFiles} \
+            --output "~{outputFilePrefix}.quant.gene_body.tracking.gz"
+    >>>
+
+    output {
+        File mergedGeneBodyTrackingFile = "~{outputFilePrefix}.quant.gene_body.tracking.gz"
+    }
+
+    runtime {
+
+        predefinedMachineType: machine_type
+
+        preemptible: preemptible_tries
+        docker: docker
+        cpu: 1
+        memory: "2 GiB"
+        disks: "local-disk ~{disksize} SSD"
+    }
+}
+
 
 task mergeReadAssignmentSummaries {
     input {

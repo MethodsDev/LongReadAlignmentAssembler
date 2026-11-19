@@ -157,6 +157,11 @@ workflow LRAA_cell_cluster_guided {
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-core:latest"
         String docker_sc = "us-central1-docker.pkg.dev/methods-dev-lab/lraa/lraa-sc:latest"
         Boolean quant_only_cluster_guided = false
+        # Single-nucleus mode (LRAA-singlecell.wdl sc_nucseq): the final quant also
+        # writes gene-body counts (LRAA gene_body_counts), and the gene_full / spliced /
+        # unspliced / ambiguous matrices and the per-barcode table are built from them.
+        # The per-cluster discovery runs do not get it.
+        Boolean sc_nucseq = false
 
         # INTERNAL PLUMBING, not a user knob: a whole-library quant the CALLER already
         # ran that is the same run the final quant below would be -- same bam, same gtf,
@@ -172,6 +177,13 @@ workflow LRAA_cell_cluster_guided {
         File? internal_final_sc_isoform_tgz
         File? internal_final_sc_splice_pattern_tgz
         File? internal_final_sc_mapping
+        # The same, for the gene-body counts (sc_nucseq).
+        File? internal_final_gene_body_tracking
+        File? internal_final_sc_gene_full_tgz
+        File? internal_final_sc_gene_spliced_tgz
+        File? internal_final_sc_gene_unspliced_tgz
+        File? internal_final_sc_gene_ambiguous_tgz
+        File? internal_final_gene_body_cell_stats
 
      }
 
@@ -185,6 +197,10 @@ workflow LRAA_cell_cluster_guided {
     # from its tracking.
     Boolean use_sc_sparse_from_shards =
         sc_sparse_from_shards && scattering_final_quant == "by_chromosome" && !reuse_final_quant
+    Boolean reuse_final_gene_body_matrices = reuse_final_quant
+        && defined(internal_final_sc_gene_full_tgz) && defined(internal_final_sc_gene_spliced_tgz)
+        && defined(internal_final_sc_gene_unspliced_tgz) && defined(internal_final_sc_gene_ambiguous_tgz)
+        && defined(internal_final_gene_body_cell_stats)
 
       
      call PartitionBam.partition_bam_by_cell_cluster {
@@ -459,6 +475,7 @@ workflow LRAA_cell_cluster_guided {
                 # As the init pass gets it, in quant-only mode too.
                 polyA_known = polyA_known,
                 config_update_json = final_quant_config_update_json,
+                gene_body_counts = sc_nucseq,
                 main_chromosomes = main_chromosomes,
                 # The one full-library partition of this pass, like the init pass's; see
                 # final_quant_partition_workers.
@@ -500,6 +517,7 @@ workflow LRAA_cell_cluster_guided {
     File final_quant_tracking = select_first([internal_final_quant_tracking, LRAA_final_quant.mergedQuantTracking])
     File final_quant_expr = select_first([internal_final_quant_expr, LRAA_final_quant.mergedQuantExpr])
     File? final_quant_read_assignment_summary = if reuse_final_quant then internal_final_quant_read_assignment_summary else LRAA_final_quant.mergedReadAssignmentSummary
+    File? final_gene_body_tracking = if reuse_final_quant then internal_final_gene_body_tracking else LRAA_final_quant.mergedGeneBodyTracking
 
     # This pass's read-assignment accounting: ONE invocation over the whole bam,
     # normalized once, so the same table shape as the init pass's (LRAA-singlecell.wdl
@@ -580,6 +598,27 @@ workflow LRAA_cell_cluster_guided {
      File sc_mapping_tsv = select_first([if reuse_final_matrices then internal_final_sc_mapping else merge_sc_cluster_shards.mapping_file,
                                          build_sc_sparse_matrices.mapping_file])
 
+     # Single-nucleus gene-body matrices, from the final quant's merged sidecar (one
+     # build whichever way the matrices above were made), or the caller's when it
+     # handed down a reused quant.
+     if (sc_nucseq && !reuse_final_gene_body_matrices) {
+         call BuildMatrices.sc_build_gene_body_sparse as build_final_gene_body {
+             input:
+                 sample_id = sample_id,
+                 gene_body_tracking = select_first([final_gene_body_tracking]),
+                 docker = docker_sc,
+                 memoryGB = memoryGBscSparseMatrices,
+                 gzip_level = sparseMatrixGzipLevel
+         }
+     }
+     if (sc_nucseq) {
+         File sc_gene_full_tgz = select_first([if reuse_final_gene_body_matrices then internal_final_sc_gene_full_tgz else build_final_gene_body.gene_full_sparse_dir_tgz])
+         File sc_gene_spliced_tgz = select_first([if reuse_final_gene_body_matrices then internal_final_sc_gene_spliced_tgz else build_final_gene_body.gene_spliced_sparse_dir_tgz])
+         File sc_gene_unspliced_tgz = select_first([if reuse_final_gene_body_matrices then internal_final_sc_gene_unspliced_tgz else build_final_gene_body.gene_unspliced_sparse_dir_tgz])
+         File sc_gene_ambiguous_tgz = select_first([if reuse_final_gene_body_matrices then internal_final_sc_gene_ambiguous_tgz else build_final_gene_body.gene_ambiguous_sparse_dir_tgz])
+         File sc_gene_body_cell_stats = select_first([if reuse_final_gene_body_matrices then internal_final_gene_body_cell_stats else build_final_gene_body.cell_stats_tsv])
+     }
+
      output {
          # final outputs
          File? LRAA_final_gtf = lraa_merge_gtf_task.mergedGTF
@@ -618,6 +657,15 @@ workflow LRAA_cell_cluster_guided {
          File sc_gene_sparse_tar_gz = sc_gene_tgz
          File sc_isoform_sparse_tar_gz = sc_isoform_tgz
          File sc_splice_pattern_sparse_tar_gz = sc_splice_tgz
+
+         # sc_nucseq only: the final quant's gene-body sidecar, its gene_full / spliced /
+         # unspliced / ambiguous matrices, and their per-barcode totals and fractions.
+         File? LRAA_final_gene_body_tracking = final_gene_body_tracking
+         File? sc_gene_full_sparse_tar_gz = sc_gene_full_tgz
+         File? sc_gene_spliced_sparse_tar_gz = sc_gene_spliced_tgz
+         File? sc_gene_unspliced_sparse_tar_gz = sc_gene_unspliced_tgz
+         File? sc_gene_ambiguous_sparse_tar_gz = sc_gene_ambiguous_tgz
+         File? gene_body_cell_stats = sc_gene_body_cell_stats
 
          # preliminary intermediate outputs (only in discovery mode)
          File? LRAA_prelim_cluster_gtfs = tar_cluster_prelim_gtf_files.tar_gz
