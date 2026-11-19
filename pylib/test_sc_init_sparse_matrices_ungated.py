@@ -208,8 +208,10 @@ def _scenario_inputs(
     precomputed_cluster_assignments_tsv=False,
     scattering_init="by_chromosome",
     sc_sparse_from_shards=True,
+    sc_nucseq=False,
 ):
     return {
+        "sc_nucseq": Value.Boolean(sc_nucseq),
         "scattering_init": Value.String(scattering_init),
         "sc_sparse_from_shards": Value.Boolean(sc_sparse_from_shards),
         "enable_filter_good_cells": Value.Boolean(True),
@@ -291,6 +293,9 @@ def _resolve(**scenario):
             "LRAA_init.mergedQuantTracking": init_output,
             "LRAA_init.mergedQuantExpr": init_output,
             "LRAA_init.mergedGTF": init_output,
+            # The sc_nucseq input check fails the run whenever it is reached, so a
+            # run that gets past it never holds its output: always null here.
+            "nucseq_requires_init_pass.ok": _NULL,
         },
         required=_DERIVED,
     )
@@ -454,3 +459,43 @@ def test_gene_symbol_sources_follow_the_filter_having_run():
         assert f"init_sc_{'splice' if level == 'splice_pattern' else level}_tgz" in (
             referenced
         ), f"{SC_WDL}: {name} does not fall back to the initial matrices"
+
+
+# sc_nucseq clusters on gene_full, which only the initial pass makes.
+NUCSEQ_CHECK = "nucseq_requires_init_pass"
+
+
+@pytest.mark.parametrize(
+    "scenario,check_runs",
+    [
+        ({"sc_nucseq": True}, False),
+        ({"sc_nucseq": True, "precomputed_cluster_assignments_tsv": True}, False),
+        (
+            {
+                "sc_nucseq": True,
+                "precomputed_init_gtf": True,
+                "precomputed_init_quant_tracking": True,
+            },
+            True,
+        ),
+        (
+            {
+                "sc_nucseq": True,
+                "precomputed_init_gtf": True,
+                "precomputed_init_quant_tracking": True,
+                "precomputed_cluster_assignments_tsv": True,
+            },
+            False,
+        ),
+        ({"precomputed_init_gtf": True, "precomputed_init_quant_tracking": True}, False),
+    ],
+    ids=["init_runs", "clusters_given", "init_skipped_clustering_runs", "all_given", "nucseq_off"],
+)
+def test_nucseq_check_only_when_clustering_lacks_gene_full(scenario, check_runs):
+    """The failing check is reached exactly when clustering would need gene_full that
+    no initial pass made, and the clustering block waits on it."""
+    workflow = _workflow()
+    env = _resolve(**scenario)
+    assert _reached(env, workflow, NUCSEQ_CHECK) is check_runs
+    for call_name in CLUSTERING_CALLS:
+        assert "nucseq_inputs_ok" in _call_condition_idents(workflow, call_name)
