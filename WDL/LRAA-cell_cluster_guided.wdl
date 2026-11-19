@@ -329,6 +329,9 @@ workflow LRAA_cell_cluster_guided {
                     rescue_unassigned_reads_via_transcriptome_alignment = rescue_unassigned_reads_via_transcriptome_alignment,
                     no_weight_reads_by_3prime_agreement = no_weight_reads_by_3prime_agreement,
                     config_update_json = cluster_config_update_json,
+                    # Off even under sc_nucseq: these runs feed the cross-cluster merge,
+                    # not the cell matrices, which come from the final quant below.
+                    gene_body_counts = false,
                     internal_cap_calibration_json = cap_calibration_json,
                     main_chromosomes = main_chromosomes,
                     partition_workers = cluster_partition_workers,
