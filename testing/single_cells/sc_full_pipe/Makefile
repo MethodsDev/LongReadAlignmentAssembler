@@ -5,7 +5,7 @@ include ../../lraa_test_docker.mk
 
 # MINIWDL_CFG and MINIWDL_RUN come from the include above.
 
-test_wdls: check_test_image_revision test_full_sc_pipe_basic_wdl  test_full_sc_pipe_cluster_guided_wdl test_full_sc_pipe_cluster_guided_denovo_wdl test_full_sc_pipe_basic_wdl_QOnly test_full_sc_pipe_basic_wdl_QOnly_LRAA_gtf test_full_sc_pipe_cluster_guided_wdl_QOnly test_full_sc_pipe_basic_wdl_QOnly_nucseq test_full_sc_pipe_cluster_guided_denovo_nucseq_wdl
+test_wdls: check_test_image_revision test_full_sc_pipe_basic_wdl  test_full_sc_pipe_cluster_guided_wdl test_full_sc_pipe_cluster_guided_denovo_wdl test_full_sc_pipe_basic_wdl_QOnly test_full_sc_pipe_basic_wdl_QOnly_LRAA_gtf test_full_sc_pipe_cluster_guided_wdl_QOnly test_full_sc_pipe_basic_wdl_QOnly_nucseq test_full_sc_pipe_cluster_guided_denovo_nucseq_wdl test_full_sc_pipe_cluster_guided_nucseq_wdl
 
 
 test_full_sc_pipe_basic_wdl:
@@ -42,6 +42,11 @@ test_full_sc_pipe_basic_wdl_QOnly_nucseq:
 test_full_sc_pipe_cluster_guided_denovo_nucseq_wdl:
 	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-cluster-guided.denovo.nucseq.inputs.json -d sc_pipe_outdir-cluster-guided-denovo-nucseq $(LRAA_WDL_DOCKER_CORE_SC) $(LRAA_WDL_EXTRA) --verbose
 	python3 check_nucseq_outputs.py sc_pipe_outdir-cluster-guided-denovo-nucseq --final
+
+# ref-guided discovery: the gene-body matrices come from discovery's final quant, as in de novo
+test_full_sc_pipe_cluster_guided_nucseq_wdl:
+	$(MINIWDL_RUN) ../../../WDL/LRAA-singlecell.wdl -i singlecell-test-mode-cluster-guided.nucseq.inputs.json -d sc_pipe_outdir-cluster-guided-nucseq $(LRAA_WDL_DOCKER_CORE_SC) $(LRAA_WDL_EXTRA) --verbose
+	python3 check_nucseq_outputs.py sc_pipe_outdir-cluster-guided-nucseq --final
 
 
 

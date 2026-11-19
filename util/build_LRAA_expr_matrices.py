@@ -250,7 +250,8 @@ def write_matrices(
                     file=diff_iso_usage_ofh,
                 )
 
-            for id in ids:
+            # sorted: ids is a set, whose order varies run to run with string hashing
+            for id in sorted(ids):
                 count_vals = [id]
                 TPM_vals = [id]
                 for sample_name in sample_names:

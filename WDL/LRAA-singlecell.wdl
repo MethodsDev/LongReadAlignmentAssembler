@@ -721,9 +721,20 @@ workflow LRAA_singlecell_wf {
   }
   File? init_sc_gene_full_tgz = build_init_gene_body.gene_full_sparse_dir_tgz
 
+  # sc_nucseq clusters on gene_full, which only the initial pass makes: a precomputed
+  # init tracking file carries no gene-body counts. Stop with that message rather than
+  # at a select_first over the missing matrix. The clustering block waits on the check.
+  if (sc_nucseq && run_clustering_phase && !run_initial_phase) {
+    call nucseq_requires_init_pass {
+      input:
+        docker = docker_sc
+    }
+  }
+  Boolean nucseq_inputs_ok = select_first([nucseq_requires_init_pass.ok, true])
+
   # 2.5/3) Empty-droplet filtering and clustering, skipped when cluster assignments
   # were supplied. Only these steps are gated; the matrices above are not.
-  if (run_clustering_phase) {
+  if (run_clustering_phase && nucseq_inputs_ok) {
 
     # 2.5) Filter good cells from the gene-level sparse matrix (optional)
     if (enable_filter_good_cells) {
@@ -1087,3 +1098,23 @@ workflow LRAA_singlecell_wf {
 }
 
 
+task nucseq_requires_init_pass {
+    # Fails on purpose; called only for an unsupported input combination.
+    input {
+        String docker
+    }
+    command <<<
+        echo "sc_nucseq clusters on gene_full counts, which only the initial pass makes. A precomputed init GTF/tracking file carries no gene-body counts. Either let the initial pass run (drop precomputed_init_gtf/precomputed_init_quant_tracking) or supply precomputed_cluster_assignments_tsv." >&2
+        exit 1
+    >>>
+    output {
+        Boolean ok = true
+    }
+    runtime {
+        docker: docker
+        cpu: 1
+        memory: "1 GiB"
+        disks: "local-disk 10 HDD"
+        preemptible: 3
+    }
+}
