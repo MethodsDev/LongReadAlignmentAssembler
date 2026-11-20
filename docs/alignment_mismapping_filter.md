@@ -125,6 +125,15 @@ Toggle with the workflow input `filter_mismappings` (default true).
                     └─ splice_pattern_collapse → outputs
 ```
 
+### Oversimplify contigs are exempt (v0.42.0)
+
+Models on `--oversimplify` contigs (e.g. chrM) are carried forward from the
+reference whatever the reads did, so the filter never removes them. Before this
+exemption the filter's coverage dependence made sparsely and densely covered
+cluster-guided inputs lose different chrM models, and the final merge of the
+cluster-guided single-cell pipeline refused the disagreeing record sets. The
+standalone util and the WDL task take `--oversimplify` / `oversimplify` for this.
+
 ## Configuration (`pylib/LRAA_Globals.py`)
 
 | key | default | meaning |
@@ -159,3 +168,61 @@ Standalone on Sequin 2M (`chrIS`), defaults: 93 of 329 models removed = 76 of th
 Harmlessness on PacBio/sim: SIRVs (all 12, incl E2), mouse, arabidopsis remove 0
 real transcripts with the mirror detector; the sequence detector's paralog
 exposure is bounded by the `<1%` gate and net-F1-positive on mouse.
+
+## Design history: rules tested and rejected (2026-09-23)
+
+Before v0.40.0, three simpler "antisense filter" rules were scored offline by
+re-scoring the v0.39.0 de novo benchmark GTFs (SIRVs, mouse and arabidopsis
+simulations, cell lines). None improved identification F1:
+
+- **Relative abundance alone** (remove an antisense model below 1% of the
+  opposite-strand gene). Net harmful: it removed about 40 real chains per
+  artifact. Real antisense isoforms (SIRV E2, simulations) are often below 1%,
+  while the artifacts on those corpora sat above it, so no threshold on this
+  axis helps. This is why expression is only ever a gate on top of a structural
+  or sequence match, never a rule on its own.
+- **Exon-footprint mirror without junction concordance** (high exon overlap with
+  an opposite-strand model at low read fraction). Safer, since real antisense
+  has its own splice structure, but still about 20 real for 1 artifact on the
+  simulations, because real overlapping antisense gene pairs share exon
+  footprint. Adding the requirement that EVERY splice site sit within 20 bp of
+  the partner's exon boundaries is what made the MIRROR detector harmless.
+- **Exact wrong-strand intron-chain duplicate.** Zero cases on any corpus: the
+  artifact is not the same intron relabelled but a cryptic canonical splice a
+  few bp away on the other strand (median shift 4 bp, max 15 bp on Sequin `s`
+  models; 53 of 56 sites within 10 bp). Hence the 20 bp tolerance.
+
+The Sequin ONT spike-ins (no true antisense) then supplied a labelled artifact
+set. Read-level checks showed the `x` run-on reads are the resident gene's own
+sense-oriented, uniquely mapped (MAPQ 60), spliced reads that minimap2 spliced on
+the opposite strand at a novel cryptic canonical site: not contamination, not
+genomic DNA, not ligation chimeras (about 0.5% supplementary alignments). The
+read-level cryptic opposite-strand splice rate is not specific to cDNA (it was
+higher in direct RNA at matched depth), so the artifact is a general
+splice-aligner plus depth effect. The mirror rule caught 25 of 25 `s` models
+but only 9 of 86 `x` models, because run-ons use new splice sites rather than
+the sense gene's boundaries; a blastn check showed both classes are
+near-identical copies (`s` median 99.0% identity at full coverage, `x` 100% at
+0.85) of an isoform with far higher expression (median ratio 0.0014 and
+0.0004), whereas real isoforms with similar matches are far MORE expressed than
+their match (median 203x). That became the SEQUENCE detector. Two variants were
+rejected along the way: restricting it to antisense matches (on mouse it flagged
+8, 7 of them real; mismapping artifacts there are mostly same-strand), and
+identity 95-98% (more paralog exposure on a real genome; 99% kept the mouse
+F1 gain while losing fewer paralogs).
+
+## Real-data benchmark (v0.40.0, 2026-09-24)
+
+LRAA v0.40.0 de novo on whole GRCh38, filtered vs the same run with
+`--no_filter_mismappings`, scored by the paper benchmark:
+
+| sample | platform | models removed | effect |
+|---|---|---|---|
+| BT474 | PacBio HiFi | 35 of 87,707 (0.04%) | intron-chain TP -2, FP -3; F1 unchanged. Both TP losses are same-strand near-identical (>=99.6%) copies below 1% relative expression, the sequence detector's paralog cost |
+| SG-NEx MCF7 | ONT cDNA | 74 of 31,081 (0.24%) | TP 0 lost, FP -51; novel FDR 0.274 -> 0.271 |
+| SG-NEx A549 | ONT cDNA | 154 (0.43%), de novo and ref-guided | about -127 FP in each regime, known TPR unchanged |
+| SIRVs x12 (incl. E2), MORF PacBio + ONT | both | 0 in all 28 runs (de novo and ref-guided) | identical scores |
+
+Nearly all ONT removals came from the SEQUENCE detector (MCF7: 72 sequence, 1
+mirror, 1 both). The filter is self-gating: on clean HiFi data there are few
+artifacts for it to find, so no platform switch is needed.
