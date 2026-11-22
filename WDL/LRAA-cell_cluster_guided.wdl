@@ -184,6 +184,7 @@ workflow LRAA_cell_cluster_guided {
         File? internal_final_sc_gene_unspliced_tgz
         File? internal_final_sc_gene_ambiguous_tgz
         File? internal_final_gene_body_cell_stats
+        File? internal_final_gene_body_strand_check
 
      }
 
@@ -620,6 +621,7 @@ workflow LRAA_cell_cluster_guided {
          File sc_gene_unspliced_tgz = select_first([if reuse_final_gene_body_matrices then internal_final_sc_gene_unspliced_tgz else build_final_gene_body.gene_unspliced_sparse_dir_tgz])
          File sc_gene_ambiguous_tgz = select_first([if reuse_final_gene_body_matrices then internal_final_sc_gene_ambiguous_tgz else build_final_gene_body.gene_ambiguous_sparse_dir_tgz])
          File sc_gene_body_cell_stats = select_first([if reuse_final_gene_body_matrices then internal_final_gene_body_cell_stats else build_final_gene_body.cell_stats_tsv])
+         File? sc_gene_body_strand_check = if reuse_final_gene_body_matrices then internal_final_gene_body_strand_check else build_final_gene_body.strand_check_tsv
      }
 
      output {
@@ -669,6 +671,7 @@ workflow LRAA_cell_cluster_guided {
          File? sc_gene_unspliced_sparse_tar_gz = sc_gene_unspliced_tgz
          File? sc_gene_ambiguous_sparse_tar_gz = sc_gene_ambiguous_tgz
          File? gene_body_cell_stats = sc_gene_body_cell_stats
+         File? gene_body_strand_check = sc_gene_body_strand_check
 
          # preliminary intermediate outputs (only in discovery mode)
          File? LRAA_prelim_cluster_gtfs = tar_cluster_prelim_gtf_files.tar_gz

@@ -3760,15 +3760,20 @@ def _invalidate_ambiguous_shard(shard_prefix, stale_track):
             pass
 
 def _append_without_first_line(
-    src_path, dst_fh, expected_num_fields=None, missing_value="1.000000"
+    src_path, dst_fh, expected_num_fields=None, missing_value="1.000000", keep_comment=None
 ):
-    """Append file to dst_fh skipping leading comments and the first data header."""
+    """Append file to dst_fh skipping leading comments and the first data header.
+
+    keep_comment: a predicate; comment lines it accepts are copied, not skipped (the
+    gene-body sidecar's strand-check lines)."""
     if src_path is None or (not os.path.exists(src_path)):
         return
     with _open_text(src_path, "rt") as fh:
         first = True
         for line in fh:
             if line.startswith("#"):
+                if keep_comment is not None and keep_comment(line):
+                    dst_fh.write(line)
                 continue
             if first:
                 first = False
@@ -5002,6 +5007,7 @@ def _run_jobs_schedule_and_merge(
             _append_without_first_line(
                 f"{tmp_prefix}{GeneBodyAssigner.gene_body_tracking_suffix()}",
                 gene_body_out_fh,
+                keep_comment=GeneBodyAssigner.is_strand_check_line,
             )
 
     if gene_body_out_fh is not None:

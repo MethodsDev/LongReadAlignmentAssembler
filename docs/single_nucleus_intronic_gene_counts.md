@@ -71,13 +71,20 @@ antisense or intergenic. There is no special handling for that, by decision
 (user, 2026-11-18). In the ALS window every spliced read carries `ts:A:+`, so that library
 is oriented.
 
-A log-only check flags it. A spliced read's transcribed strand is fixed by its junctions,
+A check flags it. A spliced read's transcribed strand is fixed by its junctions,
 so in an oriented library its aligned strand matches the unit's strand almost always,
 while unstranded cDNA gives about half the other way. `GeneBodyRecorder` counts spliced
 reads whose aligned strand disagrees with the unit's strand and, at `finish()`, logs a
 WARNING for the contig-strand when they are more than 20% of at least 200 spliced reads
 (`STRAND_CHECK_*` in `GeneBodyAssigner`). A reverse-oriented library trips it too, and
-should: its unspliced reads all land on the wrong strand. Nothing written changes.
+should: its unspliced reads all land on the wrong strand. The read rows do not change.
+Each unit also writes its counts to the sidecar as one comment line,
+`#strand_check<TAB>unit<TAB>spliced<TAB>antisense`, and every sidecar merge (no-chunk unit
+concatenation, `ChunkedRun.merge_gene_body_tracking`, `concat_gene_body_tracking.py`) keeps
+all units' lines. `gene_body_tracking_to_sparse_matrix.py --strand_check_tsv` totals them
+(`summarize_strand_check`) into a one-row table with the same thresholds applied to the whole
+run; the workflow publishes it as `init_/final_gene_body_strand_check`, since Terra keeps no
+task log warnings in its outputs.
 
 | class | definition | handled by |
 |---|---|---|
@@ -328,7 +335,14 @@ gene_id  read_name  frac_assigned  splice_class  source  n_genes  aligned_bp  ex
    were named from (`initial_annot_gtf` in quant-only, the init GTF in discovery) through
    `util/sc/gtf_gene_spans.py`, which uses LRAA's `symbol^id` feature naming. The chosen
    genes and their bins are written out. With `sc_nucseq` off, the R scripts take their old
-   path.
+   path. Over called (filtered) nuclei the floor adapts (`--adaptive_min_features`): if
+   fewer than 200 nuclei, or less than half of them, reach `min_features_nucseq`, it drops to
+   the nuclei's 10th percentile of detected genes, never below 100, and
+   `<prefix>-min_features.tsv` records the choice. A shallow library otherwise leaves too
+   few nuclei for PCA and UMAP; an unfiltered matrix of all barcodes keeps the fixed value,
+   since a quantile over empty droplets means nothing. When fewer cells than npcs + 1 pass
+   anyway, the script puts them all in cluster 0 with NA UMAP coordinates and the workflow
+   continues.
 5. **Final quant and symbols.** `LRAA-cell_cluster_guided.wdl` (`sc_nucseq` input) builds
    the same matrices and table from the final quant. `Incorporate_gene_symbols.wdl` takes
    the four gene-body matrices as optional inputs and names them like the gene matrix.

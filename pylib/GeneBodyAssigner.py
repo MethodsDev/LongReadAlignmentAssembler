@@ -80,12 +80,74 @@ POLICY_SPLIT = "split"
 READTHROUGH_TRANSCRIPT_TAG = "readthrough_transcript"
 READTHROUGH_GENE_TAG = "readthrough_gene"
 
-# Strandedness check (log only). A spliced read's transcribed strand is known from its
-# junctions, so in an oriented library its aligned strand agrees with the unit's strand
-# nearly always. Unstranded cDNA gives about half antisense, and then every unspliced
-# read, which can only take its aligned strand, lands on the wrong strand half the time.
+# Strandedness check. A spliced read's transcribed strand is known from its junctions,
+# so in an oriented library its aligned strand agrees with the unit's strand nearly
+# always. Unstranded cDNA gives about half antisense, and then every unspliced read,
+# which can only take its aligned strand, lands on the wrong strand half the time.
+# Each unit logs a warning and also writes its counts to the gene-body sidecar as one
+# comment line (STRAND_CHECK_PREFIX, then unit, spliced reads, antisense reads); the
+# merges keep these lines, and summarize_strand_check() totals them for the run.
 STRAND_CHECK_MIN_SPLICED_READS = 200
 STRAND_CHECK_MAX_ANTISENSE_FRAC = 0.2
+STRAND_CHECK_PREFIX = "#strand_check"
+STRAND_CHECK_TSV_COLUMNS = [
+    "units",
+    "spliced_reads_checked",
+    "spliced_reads_antisense",
+    "antisense_frac",
+    "max_antisense_frac",
+    "min_spliced_reads",
+    "verdict",
+]
+
+
+def is_strand_check_line(line):
+    return line.startswith(STRAND_CHECK_PREFIX + "\t")
+
+
+def summarize_strand_check(lines):
+    """Run-level strand check from the sidecar's STRAND_CHECK_PREFIX lines.
+
+    Returns a dict keyed by STRAND_CHECK_TSV_COLUMNS. verdict: "stranded",
+    "unstranded_or_reverse" (antisense fraction above STRAND_CHECK_MAX_ANTISENSE_FRAC),
+    or "too_few_spliced_reads" (fewer than STRAND_CHECK_MIN_SPLICED_READS in all).
+    """
+    units = 0
+    n = 0
+    anti = 0
+    for line in lines:
+        if not is_strand_check_line(line):
+            continue
+        f = line.rstrip("\n").split("\t")
+        units += 1
+        n += int(float(f[2]))
+        anti += int(float(f[3]))
+    frac = anti / n if n else float("nan")
+    if n < STRAND_CHECK_MIN_SPLICED_READS:
+        verdict = "too_few_spliced_reads"
+    elif frac > STRAND_CHECK_MAX_ANTISENSE_FRAC:
+        verdict = "unstranded_or_reverse"
+    else:
+        verdict = "stranded"
+    return {
+        "units": units,
+        "spliced_reads_checked": n,
+        "spliced_reads_antisense": anti,
+        "antisense_frac": frac,
+        "max_antisense_frac": STRAND_CHECK_MAX_ANTISENSE_FRAC,
+        "min_spliced_reads": STRAND_CHECK_MIN_SPLICED_READS,
+        "verdict": verdict,
+    }
+
+
+def write_strand_check_tsv(path, summary):
+    with open(path, "wt") as ofh:
+        ofh.write("\t".join(STRAND_CHECK_TSV_COLUMNS) + "\n")
+        vals = []
+        for col in STRAND_CHECK_TSV_COLUMNS:
+            v = summary[col]
+            vals.append("{:.6f}".format(v) if isinstance(v, float) else str(v))
+        ofh.write("\t".join(vals) + "\n")
 
 # how a read tied after rules 0-3 was settled (GeneBodyRecorder.counts keys)
 RULE_DOMINANCE = "dominance"
@@ -517,9 +579,17 @@ class GeneBodyRecorder:
             fields += t.to_fields()
         self._spill.write("\t".join(fields) + "\n")
 
+    def _write_strand_check(self):
+        n = int(self.counts.get("strand_check_spliced", 0))
+        if n == 0:
+            return
+        anti = int(self.counts.get("strand_check_spliced_antisense", 0))
+        self.fh.write("{}\t{}\t{}\t{}\n".format(STRAND_CHECK_PREFIX, self.label, n, anti))
+
     def finish(self):
         """Resolve the spilled ties with this unit's isoform-assigned gene counts."""
         self._warn_if_unstranded()
+        self._write_strand_check()
         if self._spill is None:
             return
         use_weights = (

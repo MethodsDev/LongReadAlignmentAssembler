@@ -46,9 +46,10 @@ Single-nucleus libraries:
   - `gene_full` (S + U + A) matrices are built next to the standard gene matrix, which stays as it is
   - empty-droplet filtering calls cells on `gene_full`, and Seurat clusters on it, with `min_features_nucseq` (1000) in place of `min_features` and variable genes ranked within bins of log10 gene span (gene_full counts grow with gene length). Everything downstream of the cluster assignments is unchanged
   - the key is merged into the config inside the LRAA task, so `init_config_update_json` stays unset and the `quant_only` reuse of the initial pass as the final quant still applies
-  - inputs should be strand-specific (oriented 10x / Kinnex reads): an unspliced read can only take its aligned strand. LRAA logs a warning per contig-strand when more than 20% of spliced reads align against their transcribed strand
+  - inputs should be strand-specific (oriented 10x / Kinnex reads): an unspliced read can only take its aligned strand. LRAA logs a warning per contig-strand when more than 20% of spliced reads align against their transcribed strand, and the run total is written to `init_gene_body_strand_check` / `final_gene_body_strand_check`
   - the initial pass must run when clustering runs: a `precomputed_init_quant_tracking` carries no gene-body counts
 - `min_features_nucseq` (1000) – Seurat's `min.features` under `sc_nucseq`; gene_full detects many more genes per nucleus than the standard matrix
+- `min_features_nucseq_min_passing_cells` (200), `min_features_nucseq_min_passing_frac` (0.5), `min_features_nucseq_adaptive_quantile` (0.10), `min_features_nucseq_lower_bound` (100) – with `sc_nucseq` and `enable_filter_good_cells`, `min_features_nucseq` is lowered for a shallow library: when fewer nuclei than `..._min_passing_cells`, or less than `..._min_passing_frac` of them, reach it, Seurat uses their `..._adaptive_quantile` of detected genes instead, never below `..._lower_bound`. The value used and why are in `seurat_min_features`. An unfiltered matrix (all barcodes) keeps the fixed value
 
 See `WDL/example_inputs/LRAA-singlecell.inputs.json` for a starting template.
 
@@ -68,7 +69,9 @@ With `sc_nucseq = true` (all null otherwise):
 - `init_gene_body_cell_stats` – per barcode: `gene_full`, `spliced`, `unspliced`, `ambiguous`, `n_genes_full`, `spliced_frac`, `unspliced_frac` (the intronic fraction; high in nuclei)
 - `filtered_gene_full_sparse_tar_gz` – gene_full over the cells emptyDrops called on it (`filtered_gene_sparse_tar_gz` is then the standard gene matrix over the same cells)
 - `seurat_gene_spans_tsv`, `seurat_variable_features_tsv` – the gene spans used, and each gene's span bin, within-bin score and whether it was selected
-- `final_gene_body_tracking`, `final_sc_gene_{full,spliced,unspliced,ambiguous}_sparse_tar_gz`, `final_gene_body_cell_stats` – the same from the pooled final quantification (cluster-guided mode)
+- `seurat_min_features` – (with filtered nuclei) `min_features` requested and used, nuclei passing each, the settings, and the reason
+- `init_gene_body_strand_check` – one row: units (contig-strands), `spliced_reads_checked`, `spliced_reads_antisense`, `antisense_frac`, the thresholds, and `verdict` (`stranded`, `unstranded_or_reverse`, or `too_few_spliced_reads`)
+- `final_gene_body_tracking`, `final_sc_gene_{full,spliced,unspliced,ambiguous}_sparse_tar_gz`, `final_gene_body_cell_stats`, `final_gene_body_strand_check` – the same from the pooled final quantification (cluster-guided mode)
 - `incl_gene_symbols_gene_{full,spliced,unspliced,ambiguous}_sparse_tar_gz` – the unfiltered final (else initial) gene-body matrices with gene symbols, when `ref_annot_gtf_source_gene_symbols` is given
 
 Final cluster-guided results (primary deliverables):

@@ -163,6 +163,16 @@ workflow LRAA_singlecell_wf {
     # clustering runs: a precomputed init tracking file carries no gene-body counts.
     Boolean sc_nucseq = false
     Int min_features_nucseq = 1000
+    # With sc_nucseq and filtered (called) nuclei, min_features_nucseq is a target, not a
+    # hard floor: when fewer than min_features_nucseq_min_passing_cells nuclei, or less
+    # than min_features_nucseq_min_passing_frac of them, reach it (a shallow library),
+    # Seurat uses their min_features_nucseq_adaptive_quantile of detected genes instead,
+    # never below min_features_nucseq_lower_bound; the value used is in
+    # seurat_min_features. Unfiltered matrices (all barcodes) keep the fixed floor.
+    Int min_features_nucseq_min_passing_cells = 200
+    Float min_features_nucseq_min_passing_frac = 0.5
+    Float min_features_nucseq_adaptive_quantile = 0.10
+    Int min_features_nucseq_lower_bound = 100
 
     # Platform/options
     Boolean HiFi = false
@@ -775,6 +785,11 @@ workflow LRAA_singlecell_wf {
         n_variable_features = n_variable_features,
         seed = seed,
         nucseq = sc_nucseq,
+        adaptive_min_features = sc_nucseq && enable_filter_good_cells,
+        min_features_min_passing_cells = min_features_nucseq_min_passing_cells,
+        min_features_min_passing_frac = min_features_nucseq_min_passing_frac,
+        min_features_adaptive_quantile = min_features_nucseq_adaptive_quantile,
+        min_features_lower_bound = min_features_nucseq_lower_bound,
         # the GTF the clustered genes were named from
         gene_spans_gtf = if quant_only then initial_annot_gtf else init_gtf_file
     }
@@ -810,6 +825,7 @@ workflow LRAA_singlecell_wf {
     File? reuse_final_sc_gene_unspliced_tgz = build_init_gene_body.gene_unspliced_sparse_dir_tgz
     File? reuse_final_sc_gene_ambiguous_tgz = build_init_gene_body.gene_ambiguous_sparse_dir_tgz
     File? reuse_final_gene_body_cell_stats = build_init_gene_body.cell_stats_tsv
+    File? reuse_final_gene_body_strand_check = build_init_gene_body.strand_check_tsv
   }
 
   # 4) Cluster-guided reconstruction + final single-cell matrices (only if mode is 'cluster-guided')
@@ -892,7 +908,8 @@ workflow LRAA_singlecell_wf {
         internal_final_sc_gene_spliced_tgz = reuse_final_sc_gene_spliced_tgz,
         internal_final_sc_gene_unspliced_tgz = reuse_final_sc_gene_unspliced_tgz,
         internal_final_sc_gene_ambiguous_tgz = reuse_final_sc_gene_ambiguous_tgz,
-        internal_final_gene_body_cell_stats = reuse_final_gene_body_cell_stats
+        internal_final_gene_body_cell_stats = reuse_final_gene_body_cell_stats,
+        internal_final_gene_body_strand_check = reuse_final_gene_body_strand_check
     }
   }
 
@@ -1009,6 +1026,9 @@ workflow LRAA_singlecell_wf {
     File? init_sc_gene_unspliced_sparse_tar_gz = build_init_gene_body.gene_unspliced_sparse_dir_tgz
     File? init_sc_gene_ambiguous_sparse_tar_gz = build_init_gene_body.gene_ambiguous_sparse_dir_tgz
     File? init_gene_body_cell_stats = build_init_gene_body.cell_stats_tsv
+    # sc_nucseq: strandedness check over the spliced reads (verdict stranded /
+    # unstranded_or_reverse / too_few_spliced_reads), init and final quant
+    File? init_gene_body_strand_check = build_init_gene_body.strand_check_tsv
     
     
     # Filter empty droplets
@@ -1029,6 +1049,8 @@ workflow LRAA_singlecell_wf {
     # sc_nucseq: the gene spans used, and the length-binned variable-gene selection
     File? seurat_gene_spans_tsv = cluster_cells.gene_spans_tsv
     File? seurat_variable_features_tsv = cluster_cells.variable_features_tsv
+    # sc_nucseq with filtered nuclei: the min_features requested and used, and why
+    File? seurat_min_features = cluster_cells.min_features_tsv
 
     # Final cluster-guided LRAA outputs (main deliverables)
     File? final_gtf = cluster_guided.LRAA_final_gtf
@@ -1055,6 +1077,7 @@ workflow LRAA_singlecell_wf {
     File? final_sc_gene_unspliced_sparse_tar_gz = cluster_guided.sc_gene_unspliced_sparse_tar_gz
     File? final_sc_gene_ambiguous_sparse_tar_gz = cluster_guided.sc_gene_ambiguous_sparse_tar_gz
     File? final_gene_body_cell_stats = cluster_guided.gene_body_cell_stats
+    File? final_gene_body_strand_check = cluster_guided.gene_body_strand_check
 
     # Per-cluster read-assignment accounting from the cluster-guided phases, one
     # table per phase. Each holds level=chunk / level=cluster / level=all_clusters

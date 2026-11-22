@@ -18,6 +18,10 @@ All four share one feature list and one barcode list, so S + U + A == gene_full
 entry for entry (velocity tools take S and U layers; scVelo/alevin-fry convention
 puts A with spliced or splits it, the caller's choice).
 
+--strand_check_tsv writes the run's strandedness check: the sidecar's per-unit
+"#strand_check" lines (spliced reads whose aligned strand is opposite the strand their
+junctions are transcribed from), totalled, with a verdict (GeneBodyAssigner).
+
 --exclude_gene_body keeps only source == "isoform" rows: the existing isoform-assigned
 reads, split by class, for comparison with the standard gene matrix.
 
@@ -38,6 +42,9 @@ from scipy import sparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from singlecell_tracking_to_sparse_matrix import make_sparse_matrix_outputs  # noqa: E402
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "../../pylib"))
+import GeneBodyAssigner  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -109,12 +116,15 @@ class Accumulator:
         return mats, genes, barcodes
 
 
-def accumulate(path, exclude_gene_body=False, flush_rows=5_000_000):
+def accumulate(path, exclude_gene_body=False, flush_rows=5_000_000, strand_check_lines=None):
+    """strand_check_lines: a list that collects the sidecar's strand-check lines."""
     acc = Accumulator(flush_rows)
     with _open(path) as fh:
         header = None
         for line in fh:
             if line.startswith("#"):
+                if strand_check_lines is not None and GeneBodyAssigner.is_strand_check_line(line):
+                    strand_check_lines.append(line)
                 continue
             parts = line.rstrip("\n").split("\t")
             if header is None:
@@ -154,6 +164,11 @@ def main():
     ap.add_argument("--gene_body_tracking", required=True)
     ap.add_argument("--output_prefix", required=True)
     ap.add_argument("--exclude_gene_body", action="store_true")
+    ap.add_argument(
+        "--strand_check_tsv",
+        default=None,
+        help="write the run-level strandedness check (one row) to this TSV",
+    )
     ap.add_argument("--gzip_level", type=int, default=1)
     ap.add_argument(
         "--flush_rows",
@@ -163,7 +178,14 @@ def main():
     )
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    accumulated = accumulate(args.gene_body_tracking, args.exclude_gene_body, args.flush_rows)
+    strand_lines = [] if args.strand_check_tsv else None
+    accumulated = accumulate(
+        args.gene_body_tracking, args.exclude_gene_body, args.flush_rows, strand_lines
+    )
+    if args.strand_check_tsv:
+        summary = GeneBodyAssigner.summarize_strand_check(strand_lines)
+        GeneBodyAssigner.write_strand_check_tsv(args.strand_check_tsv, summary)
+        logger.info("strand check: %s", summary)
     mats, genes, barcodes = build(accumulated, args.output_prefix, args.gzip_level)
     for label, m in mats.items():
         logger.info("%s: %d genes x %d barcodes, total %.1f", label, len(genes), len(barcodes), m.sum())

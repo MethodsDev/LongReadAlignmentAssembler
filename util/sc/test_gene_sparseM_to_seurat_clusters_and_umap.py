@@ -185,3 +185,109 @@ def test_nucseq_ranks_variable_genes_within_span_bins(tmp_path):
         capture_output=True, text=True,
     )
     assert failed.returncode != 0
+
+
+def _shallow_and_deep_matrix(sparse_dir, n_deep, n_shallow, n_genes=300, seed=3):
+    """n_deep barcodes detect ~250 genes, n_shallow detect ~60 (two expression groups)."""
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    features = [f"G{i}^ENSG{i:05d}" for i in range(n_genes)]
+    barcodes = [f"deep-{j}" for j in range(n_deep)] + [f"shallow-{j}" for j in range(n_shallow)]
+    counts = {}
+    for j, b in enumerate(barcodes):
+        n_detect = 250 if b.startswith("deep") else 60
+        genes = rng.choice(n_genes, size=n_detect, replace=False)
+        for i in genes:
+            mu = 6.0 if (i < 30 and j % 2 == 0) else 2.0
+            counts[(int(i), j)] = int(rng.poisson(mu)) + 1
+    _write_10x(sparse_dir, features, barcodes, counts)
+    return barcodes
+
+
+def _run_seurat(sparse_dir, prefix, extra, npcs="5"):
+    script = Path(__file__).with_name("gene_sparseM_to_seurat_clusters_and_umap.R")
+    return subprocess.run(
+        ["Rscript", str(script), "--sparseM_dir", str(sparse_dir),
+         "--output_prefix", str(prefix), "--min_cells", "1", "--percent_mt_max", "100",
+         "--npcs", npcs, "--resolution", "0.5", "--n_variable_features", "100"] + extra,
+        check=True, capture_output=True, text=True,
+    )
+
+
+def _read_settings(path):
+    with open(path, newline="") as fh:
+        return {r["setting"]: r["value"] for r in csv.DictReader(fh, delimiter="\t")}
+
+
+def _assigned(prefix):
+    with open(f"{prefix}-cell_cluster_assignments.tsv", newline="") as fh:
+        return list(csv.DictReader(fh, delimiter="\t"))
+
+
+@pytest.mark.skipif(shutil.which("Rscript") is None, reason="Rscript is unavailable")
+def test_adaptive_min_features_lowers_floor_when_too_few_pass(tmp_path):
+    # 10 deep + 90 shallow barcodes: 10 pass min_features 200 (< 200 cells, < 50%), so
+    # the floor drops to the 10th percentile of detected genes (about 60).
+    _shallow_and_deep_matrix(tmp_path / "m", n_deep=10, n_shallow=90)
+    prefix = tmp_path / "adapt"
+    _run_seurat(tmp_path / "m", prefix, ["--min_features", "200", "--adaptive_min_features",
+                                          "--min_features_lower_bound", "20"])
+    rec = _read_settings(f"{prefix}-min_features.tsv")
+    assert rec["min_features_requested"] == "200"
+    assert rec["adjusted"] == "TRUE"
+    assert 20 <= int(rec["min_features_used"]) <= 60
+    assert rec["barcodes_passing_requested"] == "10"
+    assert int(rec["barcodes_passing_used"]) >= 90
+    assert len(_assigned(prefix)) >= 90
+
+    # the lower bound wins over a lower quantile
+    prefix_b = tmp_path / "bounded"
+    _run_seurat(tmp_path / "m", prefix_b, ["--min_features", "200", "--adaptive_min_features",
+                                            "--min_features_lower_bound", "150"])
+    rec_b = _read_settings(f"{prefix_b}-min_features.tsv")
+    assert rec_b["min_features_used"] == "150"
+
+
+@pytest.mark.skipif(shutil.which("Rscript") is None, reason="Rscript is unavailable")
+def test_adaptive_min_features_keeps_floor_when_enough_pass(tmp_path):
+    # 80 deep + 20 shallow: 80 pass (80%), but fewer than min_passing_cells 200 would
+    # trigger, so lower that to 50; then the requested floor stands and the run matches
+    # one without the flag.
+    _shallow_and_deep_matrix(tmp_path / "m", n_deep=80, n_shallow=20)
+    plain = tmp_path / "plain"
+    adapt = tmp_path / "adapt"
+    _run_seurat(tmp_path / "m", plain, ["--min_features", "200"])
+    _run_seurat(tmp_path / "m", adapt, ["--min_features", "200", "--adaptive_min_features",
+                                         "--min_passing_cells", "50"])
+    rec = _read_settings(f"{adapt}-min_features.tsv")
+    assert rec["adjusted"] == "FALSE" and rec["min_features_used"] == "200"
+    assert _assigned(plain) == _assigned(adapt)
+    assert not (tmp_path / "plain-min_features.tsv").exists()
+
+
+@pytest.mark.skipif(shutil.which("Rscript") is None, reason="Rscript is unavailable")
+def test_fewer_cells_than_pcs_gives_one_cluster(tmp_path):
+    # 4 cells pass with npcs 5: no PCA; all cells in cluster 0, UMAP coordinates NA.
+    _shallow_and_deep_matrix(tmp_path / "m", n_deep=4, n_shallow=30)
+    prefix = tmp_path / "few"
+    _run_seurat(tmp_path / "m", prefix, ["--min_features", "200"], npcs="5")
+    rows = _assigned(prefix)
+    assert len(rows) == 4 and {r["cluster"] for r in rows} == {"0"}
+    with open(f"{prefix}-cell_cluster_assignments.wUMAP.tsv", newline="") as fh:
+        umap = list(csv.DictReader(fh, delimiter="\t"))
+    assert len(umap) == 4 and all(r["umap_1"] == "NA" for r in umap)
+    for suffix in ("-seurat_obj.rds", "-seurat_obj.initial.rds", "-umap.pdf"):
+        assert Path(f"{prefix}{suffix}").exists()
+
+
+@pytest.mark.skipif(shutil.which("Rscript") is None, reason="Rscript is unavailable")
+def test_few_cells_above_npcs_still_cluster(tmp_path):
+    # 12 cells (above npcs + 1, below the default neighbour counts 20 / 30) cluster.
+    _shallow_and_deep_matrix(tmp_path / "m", n_deep=12, n_shallow=10)
+    prefix = tmp_path / "twelve"
+    _run_seurat(tmp_path / "m", prefix, ["--min_features", "200"], npcs="5")
+    assert len(_assigned(prefix)) == 12
+    with open(f"{prefix}-cell_cluster_assignments.wUMAP.tsv", newline="") as fh:
+        umap = list(csv.DictReader(fh, delimiter="\t"))
+    assert all(r["umap_1"] != "NA" for r in umap)

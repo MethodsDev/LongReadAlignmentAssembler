@@ -5752,6 +5752,8 @@ def merge_gene_body_tracking(merged_dir, units, id_map=None):
                 len(missing), len(paths), missing[0]
             )
         )
+    from GeneBodyAssigner import is_strand_check_line
+
     out_path = os.path.join(merged_dir, "chunked" + GENE_BODY_TRACKING_SUFFIX)
     header = None
     with gzip.open(out_path, "wt") as ofh:
@@ -5760,7 +5762,8 @@ def merge_gene_body_tracking(merged_dir, units, id_map=None):
                 seen_header = False
                 for line in fh:
                     if line.startswith("#"):
-                        if header is None:
+                        # every unit's strand-check counts are kept, for the run total
+                        if header is None or is_strand_check_line(line):
                             ofh.write(line)
                         continue
                     if not seen_header:

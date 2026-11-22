@@ -408,10 +408,13 @@ task sc_build_gene_body_sparse {
   command <<<
     set -ex
 
+    # The run's strandedness check (from the sidecar's per-unit strand-check lines) is
+    # written to a table, since a task's log warning is easy to lose.
     gene_body_tracking_to_sparse_matrix.py \
       --gene_body_tracking ~{gene_body_tracking} \
       --output_prefix ~{output_prefix} \
-      --gzip_level ~{gzip_level}
+      --gzip_level ~{gzip_level} \
+      --strand_check_tsv "~{output_prefix}.gene_body_strand_check.tsv"
 
     gene_body_cell_stats.py \
       --sparseM_prefix ~{output_prefix} \
@@ -434,6 +437,7 @@ task sc_build_gene_body_sparse {
     File gene_unspliced_sparse_dir_tgz = "~{output_prefix}.gene_unspliced-sparseM.tar.gz"
     File gene_ambiguous_sparse_dir_tgz = "~{output_prefix}.gene_ambiguous-sparseM.tar.gz"
     File cell_stats_tsv = "~{output_prefix}.gene_body_cell_stats.tsv.gz"
+    File strand_check_tsv = "~{output_prefix}.gene_body_strand_check.tsv"
   }
 
   runtime {

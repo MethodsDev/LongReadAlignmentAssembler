@@ -10,18 +10,29 @@ cluster pseudobulk expression matrices (now sorted by id).
   (exon-only, no junction). Ties between genes are split by isoform-read weight; a gene with at
   least gene_body_dominance_frac (0.9) of the weight takes the whole read. Read-through genes
   are excluded by default. Inputs are expected to be strand-specific; the log warns when more
-  than 20% of the spliced reads (at least 200) align antisense.
+  than 20% of the spliced reads (at least 200) align antisense, and each contig-strand's counts
+  are kept in the sidecar as a "#strand_check" comment line for a run-level check.
 - LRAA-singlecell.wdl: Boolean sc_nucseq (default false; never set from the data). On, it turns
   on gene-body counts and writes gene_full (spliced + unspliced + ambiguous), gene_spliced,
   gene_unspliced and gene_ambiguous sparse matrices, with gene symbols, plus a per-barcode
   table of the three fractions (gene_body_cell_stats). emptyDrops calls cells on gene_full,
   and Seurat clusters on it with min_features_nucseq (1000) and variable genes chosen within
-  gene-length bins. Isoform, splice-pattern and standard gene matrices are unchanged. Not
+  gene-length bins. Over called nuclei, min_features_nucseq is a target rather than a fixed
+  floor: when too few nuclei reach it (fewer than min_features_nucseq_min_passing_cells, or
+  under min_features_nucseq_min_passing_frac of them), Seurat uses a low quantile of their
+  detected-gene counts (min_features_nucseq_adaptive_quantile), never below
+  min_features_nucseq_lower_bound, and records the value used (seurat_min_features). The run's
+  strandedness check is written as a table (init_/final_gene_body_strand_check: spliced reads
+  checked, antisense fraction, verdict). Isoform, splice-pattern and standard gene matrices
+  are unchanged. Not
   supported with a precomputed init GTF/tracking file when clustering runs (the workflow stops
   with a message).
 - New utilities: util/misc/concat_gene_body_tracking.py, util/sc/gene_body_cell_stats.py,
   util/sc/gtf_gene_spans.py; filter_good_cells.R --gene_matrix_dir;
-  gene_sparseM_to_seurat_clusters_and_umap.R --nucseq.
+  gene_sparseM_to_seurat_clusters_and_umap.R --nucseq and --adaptive_min_features;
+  gene_body_tracking_to_sparse_matrix.py --strand_check_tsv. The Seurat script also finishes
+  when fewer cells pass than npcs + 1 (all cells in one cluster, no UMAP), where it stopped
+  with an error.
 - util/build_LRAA_expr_matrices.py: rows are written sorted by id (their order followed set
   iteration and changed from run to run).
 - Design and test notes: docs/single_nucleus_intronic_gene_counts.md.

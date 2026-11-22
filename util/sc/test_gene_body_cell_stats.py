@@ -15,11 +15,12 @@ MISC = HERE.parent / "misc"
 HEADER = "gene_id\tread_name\tfrac_assigned\tsplice_class\tsource\tn_genes\taligned_bp\texonic_bp\tintronic_bp\n"
 
 
-def _sidecar(path, rows, comment="# LRAA version test\n"):
+def _sidecar(path, rows, comment="# LRAA version test\n", trailer=""):
     with gzip.open(path, "wt") as fh:
         fh.write(comment + HEADER)
         for gene, read, frac, cls in rows:
             fh.write(f"{gene}\t{read}\t{frac:.6f}\t{cls}\tisoform\t1\t100\t100\t0\n")
+        fh.write(trailer)
 
 
 def test_cell_stats_from_gene_body_matrices(tmp_path):
@@ -81,8 +82,10 @@ def test_gtf_gene_spans_use_output_gene_ids(tmp_path):
 
 def test_concat_gene_body_tracking(tmp_path):
     a, b = tmp_path / "a.gz", tmp_path / "b.gz"
-    _sidecar(a, [("G1", "x^u^r1", 1.0, "U")], comment="# LRAA version 1\n# LRAA CMD: shard0\n")
-    _sidecar(b, [("G2", "x^u^r2", 1.0, "S")], comment="# LRAA version 1\n# LRAA CMD: shard1\n")
+    _sidecar(a, [("G1", "x^u^r1", 1.0, "U")], comment="# LRAA version 1\n# LRAA CMD: shard0\n",
+             trailer="#strand_check\tchr1+\t40\t1\n")
+    _sidecar(b, [("G2", "x^u^r2", 1.0, "S")], comment="# LRAA version 1\n# LRAA CMD: shard1\n",
+             trailer="#strand_check\tchr2-\t60\t2\n")
     out = tmp_path / "merged.gz"
     subprocess.run(
         [sys.executable, str(MISC / "concat_gene_body_tracking.py"),
@@ -92,7 +95,11 @@ def test_concat_gene_body_tracking(tmp_path):
     lines = gzip.open(out, "rt").read().splitlines()
     assert lines[:2] == ["# LRAA version 1", "# LRAA CMD: shard0"]
     assert lines[2] + "\n" == HEADER
-    assert [l.split("\t")[0] for l in lines[3:]] == ["G1", "G2"]
+    assert [l.split("\t")[0] for l in lines[3:] if not l.startswith("#")] == ["G1", "G2"]
+    # each shard's strand-check line is kept; its other comment lines are not
+    assert [l for l in lines if l.startswith("#strand_check")] == [
+        "#strand_check\tchr1+\t40\t1", "#strand_check\tchr2-\t60\t2"]
+    assert "# LRAA CMD: shard1" not in lines
 
     bad = tmp_path / "bad.gz"
     with gzip.open(bad, "wt") as fh:
@@ -103,3 +110,23 @@ def test_concat_gene_body_tracking(tmp_path):
         capture_output=True,
     )
     assert r.returncode != 0
+
+
+def test_matrix_builder_writes_strand_check(tmp_path):
+    sidecar = tmp_path / "x.quant.gene_body.tracking.gz"
+    _sidecar(sidecar, [("A^ENSG1", "AAA^u1^r1", 1.0, "S")],
+             trailer="#strand_check\tchr1+\t300\t6\n#strand_check\tchr1-\t200\t4\n")
+    prefix = tmp_path / "P"
+    tsv = tmp_path / "P.strand_check.tsv"
+    subprocess.run(
+        [sys.executable, str(HERE / "gene_body_tracking_to_sparse_matrix.py"),
+         "--gene_body_tracking", str(sidecar), "--output_prefix", str(prefix),
+         "--strand_check_tsv", str(tsv)],
+        check=True, capture_output=True,
+    )
+    (row,) = list(csv.DictReader(open(tsv), delimiter="\t"))
+    assert (row["units"], row["spliced_reads_checked"], row["spliced_reads_antisense"]) == ("2", "500", "10")
+    assert row["verdict"] == "stranded" and row["antisense_frac"] == "0.020000"
+    # the strand-check lines do not reach the matrices
+    full = gzip.open(f"{prefix}^gene_full-sparseM/features.tsv.gz", "rt").read().split()
+    assert full == ["A^ENSG1"]

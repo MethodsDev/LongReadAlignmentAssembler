@@ -24,6 +24,17 @@ workflow GeneSparseM_To_SeuratClusters {
     Boolean nucseq = false
     File? gene_spans_gtf
     Int span_bins = 10
+
+    # Adaptive min_features: when fewer than min_features_min_passing_cells cells, or
+    # less than min_features_min_passing_frac of them, pass min_features, it is lowered
+    # to their min_features_adaptive_quantile of detected genes (not below
+    # min_features_lower_bound) and the choice is written to min_features_tsv. Only for
+    # a matrix of called cells or nuclei (the caller sets it).
+    Boolean adaptive_min_features = false
+    Int min_features_min_passing_cells = 200
+    Float min_features_min_passing_frac = 0.5
+    Float min_features_adaptive_quantile = 0.10
+    Int min_features_lower_bound = 100
   }
 
   String output_prefix = sample_id + ".genes"
@@ -44,7 +55,12 @@ workflow GeneSparseM_To_SeuratClusters {
       seed = seed,
       nucseq = nucseq,
       gene_spans_gtf = gene_spans_gtf,
-      span_bins = span_bins
+      span_bins = span_bins,
+      adaptive_min_features = adaptive_min_features,
+      min_features_min_passing_cells = min_features_min_passing_cells,
+      min_features_min_passing_frac = min_features_min_passing_frac,
+      min_features_adaptive_quantile = min_features_adaptive_quantile,
+      min_features_lower_bound = min_features_lower_bound
   }
 
   output {
@@ -55,6 +71,7 @@ workflow GeneSparseM_To_SeuratClusters {
     File cluster_assignments_tsv = run_seurat.cluster_assignments_tsv
     File? gene_spans_tsv = run_seurat.gene_spans_tsv
     File? variable_features_tsv = run_seurat.variable_features_tsv
+    File? min_features_tsv = run_seurat.min_features_tsv
   }
 }
 
@@ -78,6 +95,11 @@ task run_seurat_from_gene_sparseM {
     Boolean nucseq = false
     File? gene_spans_gtf
     Int span_bins = 10
+    Boolean adaptive_min_features = false
+    Int min_features_min_passing_cells = 200
+    Float min_features_min_passing_frac = 0.5
+    Float min_features_adaptive_quantile = 0.10
+    Int min_features_lower_bound = 100
   }
 
   Int disksize = 50 + ceil(2 * size(gene_sparse_tar_gz, "GB"))
@@ -127,6 +149,11 @@ task run_seurat_from_gene_sparseM {
       NUCSEQ_ARGS="--nucseq --gene_spans ~{output_prefix}.gene_spans.tsv --span_bins ~{span_bins}"
     fi
 
+    ADAPTIVE_ARGS=""
+    if [[ "~{adaptive_min_features}" == "true" ]]; then
+      ADAPTIVE_ARGS="--adaptive_min_features --min_passing_cells ~{min_features_min_passing_cells} --min_passing_frac ~{min_features_min_passing_frac} --adaptive_quantile ~{min_features_adaptive_quantile} --min_features_lower_bound ~{min_features_lower_bound}"
+    fi
+
     # Run the Seurat pipeline script (executable on PATH)
     gene_sparseM_to_seurat_clusters_and_umap.R \
       --sparseM_dir gene-sparseM \
@@ -140,6 +167,7 @@ task run_seurat_from_gene_sparseM {
       --n_variable_features ~{n_variable_features} \
       --seed ~{seed} \
       ${NUCSEQ_ARGS} \
+      ${ADAPTIVE_ARGS} \
       > seurat_run.log 2>&1 || {
         echo "Seurat script failed; tailing log" >&2
         tail -n 200 seurat_run.log >&2
@@ -155,6 +183,7 @@ task run_seurat_from_gene_sparseM {
     File cluster_assignments_tsv = "~{output_prefix}-cell_cluster_assignments.tsv"
     File? gene_spans_tsv = "~{output_prefix}.gene_spans.tsv"
     File? variable_features_tsv = "~{output_prefix}-variable_features.length_aware.tsv"
+    File? min_features_tsv = "~{output_prefix}-min_features.tsv"
   }
 
   runtime {

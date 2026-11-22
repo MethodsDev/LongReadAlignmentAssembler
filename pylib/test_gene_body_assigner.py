@@ -368,12 +368,18 @@ def test_chunked_merge_of_gene_body_sidecars(tmp_path):
         with gzip.open(prefix + ChunkedRun.GENE_BODY_TRACKING_SUFFIX, "wt") as fh:
             fh.write("# LRAA version test\n" + header)
             fh.write(f"G{k}\tbc^u^r{k}\t1.000000\tU\tgene_body:no_path\t1\t10\t0\t10\n")
+            fh.write(f"#strand_check\tu{k}\t10\t{k}\n")
         units.append({"quant_prefix": prefix})
     assert ChunkedRun.GENE_BODY_TRACKING_SUFFIX == GBA.gene_body_tracking_suffix()
     out = ChunkedRun.merge_gene_body_tracking(str(tmp_path), units)
     lines = gzip.open(out, "rt").read().splitlines()
     assert lines[0].startswith("#") and lines[1] + "\n" == header
-    assert [l.split("\t")[0] for l in lines[2:]] == ["G0", "G1"]
+    rows = [l for l in lines[2:] if not l.startswith("#")]
+    assert [l.split("\t")[0] for l in rows] == ["G0", "G1"]
+    # every unit's strand-check line survives (other comment lines only from the first)
+    assert [l for l in lines if GBA.is_strand_check_line(l)] == [
+        "#strand_check\tu0\t10\t0", "#strand_check\tu1\t10\t1"]
+    assert sum(1 for l in lines if l.startswith("# LRAA")) == 1
     absent = {"quant_prefix": str(tmp_path / "absent")}
     # no unit wrote one: nothing to publish; only some did: refused
     assert ChunkedRun.merge_gene_body_tracking(str(tmp_path), [absent]) is None
@@ -411,7 +417,7 @@ def test_chunked_merge_applies_discovery_gene_id_plan(tmp_path):
     assert [r[0] for r in rows] == ["g:comp-1", "g:comp-1"]
 
 
-def test_unstranded_library_warning_is_log_only(caplog):
+def test_unstranded_library_warning_and_strand_check_line(caplog):
     G2 = Tx("G", [(1000, 1999), (3000, 3999)])
     for antisense_every, expect_warning in ((2, True), (0, False)):
         fh = io.StringIO()
@@ -428,5 +434,35 @@ def test_unstranded_library_warning_is_log_only(caplog):
         warned = any("unstranded" in r.getMessage() for r in caplog.records)
         assert warned == expect_warning
         assert rec.counts["strand_check_spliced"] == GBA.STRAND_CHECK_MIN_SPLICED_READS
-        # the sidecar is the same either way
-        assert len(fh.getvalue().splitlines()) == GBA.STRAND_CHECK_MIN_SPLICED_READS
+        # the read rows are the same either way; one strand-check line carries the counts
+        lines = fh.getvalue().splitlines()
+        rows = [l for l in lines if not l.startswith("#")]
+        checks = [l for l in lines if GBA.is_strand_check_line(l)]
+        assert len(rows) == GBA.STRAND_CHECK_MIN_SPLICED_READS
+        n_anti = sum(1 for k in range(GBA.STRAND_CHECK_MIN_SPLICED_READS)
+                     if antisense_every and k % antisense_every == 0)
+        assert checks == ["#strand_check\tchrT+\t{}\t{}".format(
+            GBA.STRAND_CHECK_MIN_SPLICED_READS, n_anti)]
+        summary = GBA.summarize_strand_check(lines)
+        assert summary["verdict"] == ("unstranded_or_reverse" if expect_warning else "stranded")
+
+
+def test_strand_check_summary_totals_units_and_verdicts(tmp_path):
+    lines = ["# LRAA version x", "#strand_check\tchr1+\t150\t3", "gene\trow",
+             "#strand_check\tchr1-\t100\t2\n"]
+    s = GBA.summarize_strand_check(lines)
+    assert (s["units"], s["spliced_reads_checked"], s["spliced_reads_antisense"]) == (2, 250, 5)
+    assert s["verdict"] == "stranded" and abs(s["antisense_frac"] - 0.02) < 1e-12
+    assert GBA.summarize_strand_check(lines[:2])["verdict"] == "too_few_spliced_reads"
+    s_bad = GBA.summarize_strand_check(["#strand_check\tchr1+\t1000\t480"])
+    assert s_bad["verdict"] == "unstranded_or_reverse"
+    out = tmp_path / "sc.tsv"
+    GBA.write_strand_check_tsv(str(out), s)
+    hdr, row = out.read_text().splitlines()
+    assert hdr.split("\t") == GBA.STRAND_CHECK_TSV_COLUMNS
+    assert dict(zip(hdr.split("\t"), row.split("\t")))["antisense_frac"] == "0.020000"
+    # a recorder that checked no spliced read writes no line
+    fh = io.StringIO()
+    rec = GBA.GeneBodyRecorder(GBA.GeneBodyIndex([Tx("G", [(1, 10)])], "+"), fh, label="u")
+    rec.finish()
+    assert fh.getvalue() == ""

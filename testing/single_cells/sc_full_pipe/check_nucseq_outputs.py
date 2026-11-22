@@ -44,6 +44,14 @@ for phase in phases:
     col_sums = full.sum(axis=0).A1
     worst = max(abs(float(r["gene_full"]) - s) for r, s in zip(rows, col_sums))
     assert worst < 1e-2, f"{phase}: cell stats gene_full off by {worst}"
+    with open(one(f"{phase}_gene_body_strand_check")) as fh:
+        (strand,) = list(csv.DictReader(fh, delimiter="\t"))
+    assert int(strand["units"]) > 0 and int(strand["spliced_reads_checked"]) > 0, \
+        f"{phase}: strand check counted no spliced reads"
+    assert strand["verdict"] in ("stranded", "too_few_spliced_reads"), \
+        f"{phase}: the oriented fixture fails the strand check: {strand}"
+    print(f"{phase}: strand check {strand['spliced_reads_antisense']} of "
+          f"{strand['spliced_reads_checked']} spliced reads antisense, {strand['verdict']}")
     std, _, std_bc = matrix(f"{phase}_sc_gene_sparse_tar_gz")
     print(f"{phase}: gene_full {full.shape[0]} genes x {full.shape[1]} barcodes, "
           f"{full.sum():.0f} reads ({full.sum() / std.sum():.3f}x the gene matrix); "
@@ -54,6 +62,10 @@ with open(one("seurat_variable_features_tsv")) as fh:
     hvg = list(csv.DictReader(fh, delimiter="\t"))
 assert any(r["selected"] == "TRUE" for r in hvg), "no variable genes selected"
 assert sum(r["span"] != "NA" for r in hvg) > 0.9 * len(hvg), "most clustered genes have no span: gene ids do not match the GTF"
+if glob.glob(os.path.join(out, "seurat_min_features", "*")):
+    with open(one("seurat_min_features")) as fh:
+        rec = {r["setting"]: r["value"] for r in csv.DictReader(fh, delimiter="\t")}
+    print(f"min_features: requested {rec['min_features_requested']}, used {rec['min_features_used']}")
 with open(one("seurat_cluster_assignments")) as fh:
     cells = list(csv.DictReader(fh, delimiter="\t"))
 print(f"clustering: {len(cells)} cells in {len(set(c['cluster'] for c in cells))} clusters, "

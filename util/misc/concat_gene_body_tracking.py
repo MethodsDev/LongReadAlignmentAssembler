@@ -5,12 +5,15 @@ For a run scattered by chromosome (WDL/LRAA.wdl): each shard is its own LRAA run
 writes its own sidecar. A read belongs to one contig, so the shards' rows are disjoint
 and the merge is a concatenation, as for quant.tracking. The first file's comment lines
 (LRAA version and command) and header are kept; every other file must carry the same
-header, and its comment lines are dropped.
+header, and its comment lines are dropped, except the strand-check lines
+(GeneBodyAssigner.STRAND_CHECK_PREFIX), which every shard's are kept for the run total.
 """
 
 import argparse
 import gzip
 import sys
+
+STRAND_CHECK_PREFIX = "#strand_check\t"  # GeneBodyAssigner.STRAND_CHECK_PREFIX + tab
 
 
 def _open(path):
@@ -26,7 +29,7 @@ def concat(inputs, output):
             with _open(path) as fh:
                 for line in fh:
                     if line.startswith("#"):
-                        if k == 0:
+                        if k == 0 or line.startswith(STRAND_CHECK_PREFIX):
                             ofh.write(line)
                         continue
                     if not seen_header:
