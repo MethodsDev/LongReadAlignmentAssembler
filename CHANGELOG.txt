@@ -1,6 +1,7 @@
 v0.52.0
 
-New opt-in single-nucleus mode. Default runs are unchanged, apart from the row order of the
+New opt-in single-nucleus mode, and an opt-in NNIC_artifact category in the SQANTI-like
+classifier. Default runs are unchanged, apart from the row order of the
 cluster pseudobulk expression matrices (now sorted by id).
 
 - Gene-body counts (LRAA key gene_body_counts, default false; quant-only and discovery modes):
