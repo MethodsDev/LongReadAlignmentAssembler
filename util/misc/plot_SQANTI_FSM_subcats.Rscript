@@ -40,7 +40,7 @@ no_fsm_plot = function(title) {
 
 
 # a) multi-exon categories, FSM split
-cat_levels = c("FSM", "ISM", "NIC", "NNIC", "genic", "intronic", "antisense", "intergenic")
+cat_levels = c("FSM", "ISM", "NIC", "NNIC", "NNIC_artifact", "genic", "intronic", "antisense", "intergenic")
 me = cats %>% filter(Category %in% cat_levels)
 total_me = sum(me$Count)
 me_bars = bind_rows(

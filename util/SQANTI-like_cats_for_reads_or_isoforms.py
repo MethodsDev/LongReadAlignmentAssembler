@@ -43,6 +43,7 @@ BAM_TSV_FIELDNAMES = [
     "FSM_ISM_of_gene_scope",
     "FSM_ref_5prime_offset",
     "FSM_ref_3prime_offset",
+    "noncanonical_novel_junctions",
 ]
 
 
@@ -72,6 +73,16 @@ def main():
         type=str,
         required=False,
         help="input gtf file containing isoform structures",
+    )
+
+    parser.add_argument(
+        "--genome",
+        type=str,
+        required=False,
+        default=None,
+        help="genome fasta (indexed, or in a writable dir): with it, an NNIC whose "
+        "novel junctions include one without a canonical splice motif (GT-AG, GC-AG, "
+        "AT-AC) is categorized NNIC_artifact instead",
     )
 
     parser.add_argument(
@@ -137,6 +148,15 @@ def main():
             "Run in the lraa-sc image, which includes R."
         )
 
+    genome_fasta = args.genome
+    if genome_fasta is None:
+        logger.warning(
+            "no --genome given: splice motifs are not checked, so no NNIC_artifact category"
+        )
+    else:
+        # index once here rather than racing to build it in every worker
+        pysam.FastaFile(genome_fasta).close()
+
     num_workers = resolve_num_workers(args.CPU, input_bam)
 
     if input_bam is not None and num_workers > 1:
@@ -147,13 +167,14 @@ def main():
             num_workers,
             args.gzip_tsv,
             fsm_end_dist,
+            genome_fasta,
         )
         write_summary_and_plot(
             output_prefix, feature_category_counter, fsm_subcat_counter
         )
         sys.exit(0)
 
-    sqanti_classifier = SQANTI_like_annotator(ref_annot_gtf, fsm_end_dist)
+    sqanti_classifier = SQANTI_like_annotator(ref_annot_gtf, fsm_end_dist, genome_fasta)
 
     tsv_output_filename = output_prefix + ".iso_cats.tsv"
     if args.gzip_tsv:
@@ -218,6 +239,7 @@ def main():
                 "FSM_ISM_of_gene_scope",
                 "FSM_ref_5prime_offset",
                 "FSM_ref_3prime_offset",
+                "noncanonical_novel_junctions",
             ],
             delimiter="\t",
             lineterminator="\n",
@@ -415,6 +437,7 @@ def classify_bam_by_contig(
     num_workers,
     gzip_tsv=False,
     fsm_end_dist=None,
+    genome_fasta=None,
 ):
     """Classify a coordinate-sorted, indexed bam one contig per worker.
 
@@ -473,7 +496,12 @@ def classify_bam_by_contig(
     with ProcessPoolExecutor(max_workers=min(num_workers, len(jobs))) as executor:
         futures = {
             executor.submit(
-                classify_bam_contig, input_bam, *jobs[j], gzip_tsv, fsm_end_dist
+                classify_bam_contig,
+                input_bam,
+                *jobs[j],
+                gzip_tsv,
+                fsm_end_dist,
+                genome_fasta,
             ): j
             for j in submit_order
         }
@@ -541,13 +569,21 @@ def split_gtf_by_contig(gtf_filename, contigs, tmpdir):
 
 
 def classify_bam_contig(
-    input_bam, contig, contig_gtf, part_prefix, gzip_tsv=False, fsm_end_dist=None
+    input_bam,
+    contig,
+    contig_gtf,
+    part_prefix,
+    gzip_tsv=False,
+    fsm_end_dist=None,
+    genome_fasta=None,
 ):
     # Worker: takes only paths, strings and numbers, so it runs under any start
     # method. fsm_end_dist is passed explicitly: a --config_update applied in the
     # parent is not inherited by a spawned worker.
     if contig_gtf is not None:
-        sqanti_classifier = SQANTI_like_annotator(contig_gtf, fsm_end_dist)
+        sqanti_classifier = SQANTI_like_annotator(
+            contig_gtf, fsm_end_dist, genome_fasta
+        )
     else:
         sqanti_classifier = None  # unplaced reads are unmapped; nothing to classify
 

@@ -160,7 +160,7 @@ main = function () {
 	all_stats_df = all_stats_df %>% mutate(multi_exon = (!grepl("^se_", Category)))
 	all_stats_df$classification = str_replace(all_stats_df$Category, "^se_", "")
 	all_stats_df = all_stats_df %>% mutate(multi_exon = ifelse(multi_exon, "multi_exon", "single_exon"))
-	cat_levels = c("FSM", "ISM", "NIC", "NNIC", "genic", "intronic", "antisense", "intergenic")
+	cat_levels = c("FSM", "ISM", "NIC", "NNIC", "NNIC_artifact", "genic", "intronic", "antisense", "intergenic")
 	all_stats_df$classification = factor(all_stats_df$classification, levels=cat_levels)
     
     write.table(all_stats_df, file=paste0(output_prefix, ".tsv"), sep="\t", quote=F, row.names=F)

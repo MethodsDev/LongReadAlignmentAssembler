@@ -4,7 +4,9 @@ import sys, os, re
 import logging
 from collections import defaultdict
 import intervaltree as itree
+import pysam
 from MockTranscript import MockTranscript
+from GenomeFeature import Intron
 
 from Transcript import Transcript, GTF_contig_to_transcripts
 from Pretty_alignment import Pretty_alignment
@@ -58,13 +60,22 @@ logging.basicConfig(format=FORMAT, level=logging.INFO)
 #          exactly when both offsets are within fsm_full_length_max_end_dist.
 #
 #  A non-empty field is the flag; its value names the reference isoforms.
+#
+#  NNIC_artifact (only when a genome is given): an NNIC whose novel junctions (introns
+#  absent from the reference) include at least one without a canonical splice motif
+#  (GT-AG, GC-AG or AT-AC on the feature's strand). Such junctions are mostly alignment
+#  or library artifacts rather than novel splicing. Reference introns are never tested.
+#  Column noncanonical_novel_junctions lists them as lend-rend:motif, the motif read in
+#  the transcribed orientation (e.g. 14830-14969:GA-AG); empty for every other feature.
 
 
 class SQANTI_like_annotator:
 
     MIN_FSM_SE_FRAC_OVERLAP = 0.9
 
-    def __init__(self, ref_annot_gtf, fsm_full_length_max_end_dist=None):
+    def __init__(
+        self, ref_annot_gtf, fsm_full_length_max_end_dist=None, genome_fasta=None
+    ):
 
         # default from LRAA_Globals; callers that run in worker processes pass it
         # explicitly, since a config override made in the parent is not inherited
@@ -74,6 +85,10 @@ class SQANTI_like_annotator:
                 "sqlike_fsm_full_length_max_end_dist"
             ]
         self.fsm_full_length_max_end_dist = int(fsm_full_length_max_end_dist)
+
+        # opened on first use, so the annotator stays picklable until it classifies
+        self.genome_fasta = genome_fasta
+        self._genome = None
 
         logger.info("-parsing gtf_file: {}".format(ref_annot_gtf))
 
@@ -128,6 +143,7 @@ class SQANTI_like_annotator:
             "FSM_ISM_of_gene_scope": "",
             "FSM_ref_5prime_offset": "",
             "FSM_ref_3prime_offset": "",
+            "noncanonical_novel_junctions": "",
         }
 
         feature_classified = False
@@ -245,7 +261,15 @@ class SQANTI_like_annotator:
                     feature_class_info["sqanti_cat"] = "NIC"
                     feature_classified = True
                 elif found_ref_shared_splice and found_nonref_splice:
-                    feature_class_info["sqanti_cat"] = "NNIC"
+                    noncanonical = self._noncanonical_novel_junctions(
+                        feature_chrom, feature_strand, transcribed_feature_obj
+                    )
+                    feature_class_info["sqanti_cat"] = (
+                        "NNIC_artifact" if noncanonical else "NNIC"
+                    )
+                    feature_class_info["noncanonical_novel_junctions"] = ",".join(
+                        noncanonical
+                    )
                     feature_classified = True
 
         else:
@@ -387,6 +411,41 @@ class SQANTI_like_annotator:
             feature_classified = True
 
         return feature_class_info
+
+    def _noncanonical_novel_junctions(
+        self, feature_chrom, feature_strand, transcribed_feature_obj
+    ):
+        # Novel junctions (not a reference intron) lacking a canonical motif on the
+        # feature's strand, as lend-rend:motif. Empty without a genome.
+        if self.genome_fasta is None:
+            return []
+        if self._genome is None:
+            self._genome = pysam.FastaFile(self.genome_fasta)
+
+        canonical = (
+            Intron.splice_dinucs_top_strand
+            if feature_strand == "+"
+            else Intron.splice_dinucs_bottom_strand
+        )
+        noncanonical = list()
+        for intron in transcribed_feature_obj.get_introns():
+            intron_lend, intron_rend = intron
+            # the same token as the reference lookup in classify_alignment_or_isoform
+            intron_tok = make_intron_token(feature_chrom, feature_strand, intron)
+            if intron_tok in self.intron_to_isoforms:
+                continue
+            dinucs = (
+                self._genome.fetch(feature_chrom, intron_lend - 1, intron_lend + 1)
+                + self._genome.fetch(feature_chrom, intron_rend - 2, intron_rend)
+            ).upper()
+            if dinucs in canonical:
+                continue
+            if feature_strand == "-":
+                dinucs = dinucs[::-1].translate(str.maketrans("ACGTN", "TGCAN"))
+            noncanonical.append(
+                "{}-{}:{}-{}".format(intron_lend, intron_rend, dinucs[:2], dinucs[2:])
+            )
+        return noncanonical
 
     def _build_isoform_data_structures(self):
 

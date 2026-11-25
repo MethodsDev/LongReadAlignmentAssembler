@@ -8,7 +8,12 @@ workflow LRAA_sqanti_like_reads_eval_wf {
         File? input_BAM
         File? input_BAI
         File? input_GTF
-        
+
+        # Genome fasta (and its .fai, optional): with it, NNIC features whose novel
+        # junctions include a noncanonical splice motif are categorized NNIC_artifact.
+        File? genome_fa
+        File? genome_fai
+
         # Named docker_sc, not docker: the R plotting step needs lraa-sc. Renamed 2026-10-06
         # so a saved Terra value for the old `docker` input (lraa:latest, the v0.17.7
         # default) cannot carry over and run this on lraa-core, which has no R.
@@ -34,6 +39,8 @@ workflow LRAA_sqanti_like_reads_eval_wf {
           input_BAM = input_BAM,
           input_BAI = input_BAI,
           input_GTF = input_GTF,
+          genome_fa = genome_fa,
+          genome_fai = genome_fai,
           docker = docker_sc,
           min_disk_GB = min_disk_GB,
           cpu = cpu,
@@ -64,6 +71,9 @@ task LRAA_sqanti_like_reads_eval_task {
 
         File ref_annot_GTF
 
+        File? genome_fa
+        File? genome_fai
+
         String docker
         Int? min_disk_GB
         Int cpu
@@ -73,6 +83,18 @@ task LRAA_sqanti_like_reads_eval_task {
     
     command <<<
         set -ex
+
+        genome_opt=""
+        if [[ "~{genome_fa}" != "" ]]; then
+             # link fasta and index side by side; index only if no fai was given
+             ln -s ~{genome_fa} genome.fa
+             if [[ "~{genome_fai}" != "" ]]; then
+                 ln -s ~{genome_fai} genome.fa.fai
+             else
+                 samtools faidx genome.fa
+             fi
+             genome_opt="--genome genome.fa"
+        fi
  
         if [[ "~{input_BAM}" != "" ]]; then
 
@@ -86,11 +108,11 @@ task LRAA_sqanti_like_reads_eval_task {
                  samtools index -@ ~{cpu} input.bam
              fi
 
-             SQANTI-like_cats_for_reads_or_isoforms.py --ref_gtf ~{ref_annot_GTF} --output_prefix ~{sample_id} --input_bam input.bam --CPU auto --gzip_tsv
+             SQANTI-like_cats_for_reads_or_isoforms.py --ref_gtf ~{ref_annot_GTF} --output_prefix ~{sample_id} --input_bam input.bam --CPU auto --gzip_tsv ${genome_opt}
 
         elif [[ "~{input_GTF}" != "" ]]; then
  
-             SQANTI-like_cats_for_reads_or_isoforms.py --ref_gtf ~{ref_annot_GTF} --output_prefix ~{sample_id} --input_gtf ~{input_GTF} --gzip_tsv
+             SQANTI-like_cats_for_reads_or_isoforms.py --ref_gtf ~{ref_annot_GTF} --output_prefix ~{sample_id} --input_gtf ~{input_GTF} --gzip_tsv ${genome_opt}
 
        fi
 

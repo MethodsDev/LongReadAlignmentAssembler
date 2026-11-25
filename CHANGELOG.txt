@@ -36,6 +36,13 @@ cluster pseudobulk expression matrices (now sorted by id).
 - util/build_LRAA_expr_matrices.py: rows are written sorted by id (their order followed set
   iteration and changed from run to run).
 - Design and test notes: docs/single_nucleus_intronic_gene_counts.md.
+- SQANTI-like classifier (util/SQANTI-like_cats_for_reads_or_isoforms.py, BAM and GTF modes):
+  new --genome. With it, an NNIC whose novel (non-reference) junctions include one without a
+  canonical splice motif (GT-AG, GC-AG, AT-AC on the feature's strand) is categorized
+  NNIC_artifact; reference introns are not tested. A new column, noncanonical_novel_junctions,
+  lists those junctions as lend-rend:motif. Without --genome the categories are unchanged
+  (the column is empty). LRAA-sqanti-like-reads-eval.wdl takes optional genome_fa/genome_fai,
+  and the category plots order NNIC_artifact after NNIC.
 
 v0.51.1
 
